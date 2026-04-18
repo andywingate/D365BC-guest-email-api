@@ -29,12 +29,12 @@ The same problem applies to any user (guest or member) in a BC environment hoste
 |---|---|---|
 | Account model | Single fixed-GUID account (`Current User Email API`) | BC's `Email Scenario` table maps a scenario to one `Account Id`. A single account set as default means scenarios are configured once and every send resolves to the correct user's token at runtime via `UserSecurityId()`. Same pattern as BC's built-in Current User connector. |
 | OAuth flow | Authorization Code + PKCE (plain method) | Best practice for delegated flows. Plain method avoids SHA-256 byte manipulation in AL. |
-| Token storage | `IsolatedStorage` with `DataScope::User` | Per-user, private, encrypted at rest. Tokens are read back as `Text` for HTTP headers - `SecretText` wrapping adds no meaningful protection here since tokens originate as HTTP response text. |
-| Client secret storage | `IsolatedStorage` with `DataScope::Company` | Never in a table field. Admin sets it via a masked field; value is never read back to the UI. |
+| Token storage | `IsolatedStorage` with `DataScope::User` | Per-user, private. Phase 1 stores access and refresh tokens via plain `Set()`. Phase 3 will fix: only persist the refresh token, use `SetEncrypted()` for client secret (under 215-char limit), use `SecretText` parameters throughout, and stop persisting short-lived access tokens. |
+| Client secret storage | `IsolatedStorage` with `DataScope::Company` | Never in a table field. Admin sets it via a masked field; value is never read back to the UI. Phase 3 will switch to `SetEncrypted()`. |
 | Guest detection | `#EXT#` in `User."Authentication Email"` | Entra ID always injects `#EXT#` into the UPN of every B2B guest. Available without additional Graph permissions. Not used for routing (single-account model handles all users) but available for informational use. |
-| HTTP client | Native AL `HttpClient` | No external dependencies. |
-| Redirect URI | `https://login.microsoftonline.com/common/oauth2/nativeclient` | User pastes full redirect URL into BC to complete the exchange. Simple for PoC. |
-| RestClientOAuth library | Not adopted as a dependency | Arend-Jan Kauffmann's library follows the same Auth Code + PKCE pattern and is MIT licensed, but is in-memory only. This app requires persistent tokens since the consent session and the send context are separate. Architecture patterns were informed by that work. |
+| HTTP client | Native AL `HttpClient` | No external dependencies. Phase 3 will migrate to System Application `Rest Client` module to reduce boilerplate. |
+| Redirect URI | `https://login.microsoftonline.com/common/oauth2/nativeclient` | User pastes full redirect URL into BC to complete the exchange. Simple for PoC. Phase 3 will evaluate replacing with System Application `OAuth2` module. |
+| RestClientOAuth library | Not adopted as a dependency | Arend-Jan Kauffmann's library follows the same Auth Code + PKCE pattern and is MIT licensed, but is in-memory only. This app requires persistent tokens since the consent session and the send context are separate. Architecture patterns were informed by that work. Phase 3 will evaluate incorporating code or adopting the System Application OAuth2 module. |
 
 ---
 
@@ -89,11 +89,58 @@ The Email Scenarios problem was solved by the single fixed-account model. A sing
 
 ---
 
-## Phase 3 - Multi-Home-Tenancy Support *(next)*
+## Phase 3 *(next)*
+
+Phase 3 covers two workstreams: feedback changes from code review, and multi-home-tenancy support.
+
+### 3a - Feedback Changes (Code Review)
+
+Based on review by Arend-Jan Kauffmann. All items are valid and accepted.
+
+#### Security Hardening
+
+**SecretText and NonDebuggable** - `W365 OAuth Mgt` currently passes access tokens, refresh tokens, and client secret as plain `Text` parameters. All token/secret-handling procedures should use `SecretText` and be marked `[NonDebuggable]` to prevent debugger exposure. Both are available on BC27 (runtime 16.0).
+
+Files affected: `W365OAuthMgt.Codeunit.al`, `W365GraphMailMgt.Codeunit.al`
+
+**IsolatedStorage encryption** - The code uses `IsolatedStorage.Set()` (plain text, not encrypted). `SetEncrypted()` is limited to 215 characters, which rules it out for access tokens (~1200-2000 chars from Entra) and refresh tokens. Client secret is typically under 215 chars and should use `SetEncrypted()`. Fix the misleading code comments that claim `IsolatedStorage.Set()` encrypts at rest - it does not.
+
+Files affected: `W365OAuthMgt.Codeunit.al`
+
+**IsolatedStorage cross-app risk** - IsolatedStorage is scoped by app ID. A second PTE published with the same app GUID could read these values and steal tokens. Investigate whether this is reproducible on current BC versions. If confirmed, document as a known PTE deployment risk and consider mitigations (e.g. prefixed keys, runtime caller validation).
+
+#### Token Storage Simplification
+
+**Stop persisting access tokens** - Only the refresh token needs persistent storage. The access token is valid for ~60 minutes and should not be stored. The code verifier and state are already cleaned up after exchange (correct). Remove `W365_AT` and `W365_EXP` keys from IsolatedStorage. Acquire a fresh access token from the refresh token on each send operation. The access token should live only as a `SecretText` variable for the duration of a single operation.
+
+Files affected: `W365OAuthMgt.Codeunit.al`
+
+#### Replace HttpClient with RestClient
+
+The System Application `Rest Client` module (available BC21+) handles headers, content types, error responses, and retry logic. The current `W365 Graph Mail Mgt` has ~100 lines of HTTP boilerplate that RestClient eliminates. Adopt RestClient for all Graph API calls.
+
+Files affected: `W365GraphMailMgt.Codeunit.al`
+
+#### Replace Custom Control Add-in with System Application OAuth2
+
+The current implementation uses a custom control add-in (`W365 OAuth Popup`) with a JavaScript file to open a popup, monitor for the redirect URL, and pass the auth code back to AL. The AL side then manually builds the PKCE challenge, exchanges the code for tokens, and stores them.
+
+BC's System Application provides the `OAuth2` codeunit (501) with procedures like `AcquireAuthorizationCodeWithCacheByTokenCache` that handle the entire OAuth popup, PKCE, and code exchange flow natively in the BC web client. Adopting this would eliminate:
+
+- `W365 OAuth Popup` control add-in and its JavaScript file
+- Manual PKCE verifier generation in `W365 OAuth Mgt`
+- Manual code exchange HTTP call in `W365 OAuth Mgt`
+- The `W365 OAuth Consent` page popup wiring
+
+Investigate whether the System Application OAuth2 module supports the specific requirements (delegated `Mail.Send`, multi-tenant app registration, guest user consent). If it does, this is a significant simplification. If not (e.g. due to token cache ownership or scope limitations), incorporate patterns from AJ's RestClientOAuth library (MIT licensed) to simplify the manual flow while keeping `SecretText` and `[NonDebuggable]`.
+
+Files affected: `W365OAuthMgt.Codeunit.al`, `W365OAuthConsent.Page.al`, `W365OAuthPopup.ControlAddin.al`, `W365OAuthPopup.js`
+
+### 3b - Multi-Home-Tenancy Support
 
 The current `W365 Email Setup` is a singleton - one App ID and one Host Tenant ID. This covers environments where all users authenticate against a single Entra app registration.
 
-In environments where guests come from multiple home tenancies that each require a separate app registration (e.g. due to client IT policy), Phase 3 extends the setup layer:
+In environments where guests come from multiple home tenancies that each require a separate app registration (e.g. due to client IT policy), Phase 3b extends the setup layer:
 
 - Change `W365 Email Setup` from singleton to row-based, keyed by home tenant domain or tenant ID
 - At token exchange time, detect the current user's home domain from their `#EXT#` UPN and look up the matching setup row
@@ -106,15 +153,17 @@ In environments where guests come from multiple home tenancies that each require
 
 - Tokens never appear in error messages, captions, or telemetry dimensions
 - Client secret stored in `IsolatedStorage` only - never read back to the UI after saving
+- Client secret should use `SetEncrypted()` (under 215-char limit); access/refresh tokens exceed this limit and cannot use `SetEncrypted()`
+- All token-handling procedures should use `SecretText` parameters and `[NonDebuggable]` attribute
 - Redirect URI validated against the stored value on every callback - mismatch is rejected
 - OAuth scope locked to `Mail.Send` only
 - Token refresh is automatic and transparent to the user
 - Consent is strictly per-user - tokens are `DataScope::User` and cannot be accessed by other users or background tasks running as a different identity
+- IsolatedStorage cross-app risk: a PTE with the same app GUID could theoretically read stored values - to be investigated and mitigated
 
 ---
 
 ## Parking Lot
 
 - Attachment handling - Graph `sendMail` supports base64 inline attachments up to 4MB and upload sessions for larger files; size threshold strategy deferred to a future phase
-- PKCE S256 upgrade - current implementation uses plain method; S256 is more correct but requires SHA-256 byte handling in AL
 - Multi-language / translation - not in scope for per-tenant extension
