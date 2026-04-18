@@ -1,7 +1,7 @@
 # D365BC-guest-email-api
 
 > **AI-Driven Proof of Concept**
-> This project was written almost entirely by GitHub Copilot (Claude Sonnet), with direction, architecture decisions, and testing by [Andy Wingate](https://github.com/andywingate). Security review and code feedback by [Arend-Jan Kauffmann](https://github.com/ajkauffmann). It is a proof-of-concept - **not yet intended for production use**. See [.github/instructions/](.github/instructions/) for the full AI context (coding standards and instructions) used throughout development.
+> This project was written almost entirely by GitHub Copilot (Claude Sonnet), with direction and testing by [Andy Wingate](https://github.com/andywingate). Security review and code feedback by [Arend-Jan Kauffmann](https://github.com/ajkauffmann). It is a proof-of-concept. See [.github/instructions/](.github/instructions/) for the full AI context (coding standards and instructions) used throughout development.
 
 An AL extension for Microsoft Dynamics 365 Business Central that lets every user - guest or member - send email from their own work address via the Microsoft Graph API (`Mail.Send`), with zero per-user configuration by admins.
 
