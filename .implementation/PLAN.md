@@ -33,7 +33,7 @@ The same problem applies to any user (guest or member) in a BC environment hoste
 | Client secret storage | `IsolatedStorage` with `DataScope::Company` | Never in a table field. Admin sets it via a masked field; value is never read back to the UI. Phase 3 will switch to `SetEncrypted()`. |
 | Guest detection | `#EXT#` in `User."Authentication Email"` | Entra ID always injects `#EXT#` into the UPN of every B2B guest. Available without additional Graph permissions. Not used for routing (single-account model handles all users) but available for informational use. |
 | HTTP client | Native AL `HttpClient` | No external dependencies. Phase 3 will migrate to System Application `Rest Client` module to reduce boilerplate. |
-| Redirect URI | `https://login.microsoftonline.com/common/oauth2/nativeclient` | User pastes full redirect URL into BC to complete the exchange. Simple for PoC. Phase 3 will evaluate replacing with System Application `OAuth2` module. |
+| Redirect URI | `https://businesscentral.dynamics.com/OAuthLanding.htm` | BC's standard OAuth landing page. The popup control add-in opens the consent URL and detects the redirect automatically. Phase 3 will evaluate replacing with System Application `OAuth2` module. |
 | RestClientOAuth library | Not adopted as a dependency | Arend-Jan Kauffmann's library follows the same Auth Code + PKCE pattern and is MIT licensed, but is in-memory only. This app requires persistent tokens since the consent session and the send context are separate. Architecture patterns were informed by that work. Phase 3 will evaluate incorporating code or adopting the System Application OAuth2 module. |
 
 ---
@@ -45,7 +45,7 @@ The app registration lives in the **host tenant**. It uses delegated permissions
 | Setting | Value |
 |---|---|
 | Supported account types | Accounts in any organizational directory (Multitenant) |
-| Redirect URI | `https://login.microsoftonline.com/common/oauth2/nativeclient` |
+| Redirect URI | `https://businesscentral.dynamics.com/OAuthLanding.htm` |
 | API Permission | `Mail.Send` (delegated) - Microsoft Graph |
 | Client secret | Required for token exchange - stored in `IsolatedStorage`, never in a table |
 

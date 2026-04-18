@@ -31,7 +31,7 @@ page 50103 "W365 Email Setup Card"
                 field("Redirect URI"; Rec."Redirect URI")
                 {
                     ApplicationArea = All;
-                    ToolTip = 'The redirect URI registered on the Entra app. Recommended: https://login.microsoftonline.com/common/oauth2/nativeclient';
+                    ToolTip = 'The redirect URI registered on the Entra app. Recommended: https://businesscentral.dynamics.com/OAuthLanding.htm';
                 }
             }
             group(ClientSecretGroup)
