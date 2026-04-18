@@ -147,6 +147,28 @@ In environments where guests come from multiple home tenancies that each require
 - Admin UI updated to a list + card pattern to manage multiple registrations
 - IsolatedStorage key strategy for per-registration client secrets (keyed by App ID)
 
+### 3c - Email Attachment Support
+
+The current `Send()` implementation passes subject and body only - attachments from the `Email Message` codeunit are not forwarded to Graph. This is a critical gap for BC where almost every email send includes a file (invoices, statements, reports, delivery notes).
+
+Graph supports two attachment strategies:
+
+| Attachment Size | Method | API Pattern |
+|---|---|---|
+| Under ~3MB | Inline base64 in `sendMail` JSON | Single `POST /me/sendMail` with `attachments` array in the message body. Base64 encoding inflates by ~33%, so the practical file limit is ~3MB to stay under the 4MB JSON body limit. |
+| 3MB - 150MB | Upload session | `POST /me/messages` (create draft) then `POST /me/messages/{id}/attachments/createUploadSession` then `PUT` byte ranges in chunks, then `POST /me/messages/{id}/send`. |
+
+Implementation:
+
+1. Read attachments from `Email Message` codeunit using `GetAttachments()`
+2. For each attachment, check size
+3. If all attachments fit inline (total base64 < ~3MB), use the current `sendMail` path with an `attachments` array added to the JSON
+4. If any attachment exceeds ~3MB, switch to the draft + upload session pattern for that message
+5. Target: support attachments up to 30MB comfortably (well within Graph's 150MB upload session limit)
+6. Requires `Mail.ReadWrite` delegated permission in addition to `Mail.Send` for the draft/upload path - update the Entra app registration requirements and QUICKSTART accordingly
+
+Files affected: `W365GraphMailMgt.Codeunit.al`, `W365GuestEmailConnector.Codeunit.al`
+
 ---
 
 ## Security
@@ -165,5 +187,4 @@ In environments where guests come from multiple home tenancies that each require
 
 ## Parking Lot
 
-- Attachment handling - Graph `sendMail` supports base64 inline attachments up to 4MB and upload sessions for larger files; size threshold strategy deferred to a future phase
 - Multi-language / translation - not in scope for per-tenant extension
