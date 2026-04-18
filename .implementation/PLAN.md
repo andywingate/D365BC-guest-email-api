@@ -1,176 +1,120 @@
-# D365BC Guest Email API - Project Plan
+# D365BC Current User Email API - Project Plan
 
 ## Problem Statement
 
-Business Central natively supports a "Current User" email account, which sends email using the signed-in user's identity via the host tenant. This works for member accounts in that tenant.
+Business Central's built-in email connectors do not work for Entra B2B guest users:
 
-Guest accounts (external users invited via Azure AD B2B) are signed into BC under the host tenant, but their actual email identity lives in their home tenant. When BC tries to send email "as" them using the host tenant's current user mechanism, it either fails or sends from the wrong address.
+- **Current User** (built-in) - works only for accounts native to the BC host tenant. Guest users have a cross-tenant identity; BC cannot obtain a `Mail.Send` token for them.
+- **Microsoft 365 / SMTP** - sends from a shared mailbox or service account, not the individual user's address.
 
-This app solves that by routing outbound email for guest users through Microsoft Graph API with a delegated `Mail.Send` token scoped to each guest user's home tenancy identity.
+The result: guest users in BC either cannot send email, or their email arrives from the wrong address.
+
+The same problem applies to any user (guest or member) in a BC environment hosted by a partner or shared services organisation where users sign in from their own company accounts.
 
 ---
 
 ## Goals
 
-- Guest users send email from BC appearing to come from their real home-tenancy address (e.g. `user@theircompany.com`)
-- No change in experience for member accounts - they continue using BC's native current user email
-- No user-visible complexity after the one-time OAuth consent step
+- Every user - guest or member - sends email from BC using their own work address
+- Admins configure once; no per-user admin action required after initial setup
+- Users complete a one-time OAuth consent; all subsequent sends are automatic
+- All BC send paths covered - compose dialog, customer statements, scheduled reports, background jobs, ISV extensions
 - Open source, per-tenant extension (not AppSource)
 
 ---
 
-## Account Type Detection - Member vs Guest
+## Decisions and Assumptions
 
-BC does not natively expose whether a user is a member or guest account via a simple flag. However, Entra ID always injects `#EXT#` into the User Principal Name of every B2B guest invite. This appears in the BC `User."Authentication Email"` field.
-
-Example guest UPN: `user_theircompany.com#EXT#@yourtenant.onmicrosoft.com`
-
-**Decision**: Automatic detection via `#EXT#` in Authentication Email. No manual flag, no User Setup extension, no additional Graph permissions required. This is simpler, more reliable, and requires zero admin effort per user.
-
----
-
-## Phase 1 - Proof of Concept (Priority: Ship Fast)
-
-### Scope
-
-- Azure App Registration setup guide (README / wiki - not automated)
-- Central admin setup table and page for the app registration details
-- Per-user OAuth consent flow (Authorization Code + PKCE)
-- Token storage (encrypted, per-user)
-- Token refresh on expiry
-- Sending a single email via `POST /me/sendMail` Graph endpoint
-- Manual `W365 Use Graph Email` flag on User Setup
-- A test action (temporary) on a page to trigger a test email send - validates the full flow
-
-### Out of Scope for Phase 1
-
-- Email Scenarios integration (Phase 2)
-- Automatic guest detection
-- Attachment handling beyond what Graph sendMail supports inline
-- CC / BCC handling beyond basic pass-through
-
----
-
-## Phase 2 - Email Scenarios Integration *(complete - delivered in Phase 1)*
-
-The Email Scenarios problem was solved by the **Current User Email API** single fixed-account model. Rather than registering one account per user and requiring scenario mappings to be updated per user, a single logical account (`Email Connector v4`) is registered once. Admins set it as the system default once. BC's Email Scenarios can be mapped to it once. Every send - regardless of path - resolves to the correct user's Graph token at runtime via `UserSecurityId()`. No per-user scenario management required.
+| Decision | Choice | Rationale |
+|---|---|---|
+| Account model | Single fixed-GUID account (`Current User Email API`) | BC's `Email Scenario` table maps a scenario to one `Account Id`. A single account set as default means scenarios are configured once and every send resolves to the correct user's token at runtime via `UserSecurityId()`. Same pattern as BC's built-in Current User connector. |
+| OAuth flow | Authorization Code + PKCE (plain method) | Best practice for delegated flows. Plain method avoids SHA-256 byte manipulation in AL. |
+| Token storage | `IsolatedStorage` with `DataScope::User` | Per-user, private, encrypted at rest. Tokens are read back as `Text` for HTTP headers - `SecretText` wrapping adds no meaningful protection here since tokens originate as HTTP response text. |
+| Client secret storage | `IsolatedStorage` with `DataScope::Company` | Never in a table field. Admin sets it via a masked field; value is never read back to the UI. |
+| Guest detection | `#EXT#` in `User."Authentication Email"` | Entra ID always injects `#EXT#` into the UPN of every B2B guest. Available without additional Graph permissions. Not used for routing (single-account model handles all users) but available for informational use. |
+| HTTP client | Native AL `HttpClient` | No external dependencies. |
+| Redirect URI | `https://login.microsoftonline.com/common/oauth2/nativeclient` | User pastes full redirect URL into BC to complete the exchange. Simple for PoC. |
+| RestClientOAuth library | Not adopted as a dependency | Arend-Jan Kauffmann's library follows the same Auth Code + PKCE pattern and is MIT licensed, but is in-memory only. This app requires persistent tokens since the consent session and the send context are separate. Architecture patterns were informed by that work. |
 
 ---
 
 ## Azure App Registration Requirements
 
-The app registration lives in the **host tenant** (the BC tenant). It uses delegated permissions so each user's consent applies only to their own mailbox.
+The app registration lives in the **host tenant**. It uses delegated permissions so each user's consent applies only to their own mailbox.
 
 | Setting | Value |
 |---|---|
 | Supported account types | Accounts in any organizational directory (Multitenant) |
-| Redirect URI | BC OAuthLanding page URL or a minimal external landing page |
+| Redirect URI | `https://login.microsoftonline.com/common/oauth2/nativeclient` |
 | API Permission | `Mail.Send` (delegated) - Microsoft Graph |
-| Client secret | Required for token exchange (stored in IsolatedStorage, never in a table) |
-
-A setup guide (markdown) will be included in the repo covering how to register the app and where to get the client ID, tenant ID, and client secret.
+| Client secret | Required for token exchange - stored in `IsolatedStorage`, never in a table |
 
 ---
 
-## AL Objects - Phase 1
+## Phase 1 - Core Send Capability *(complete)*
+
+### Delivered
+
+- Central admin setup table and card page (`W365 Email Setup`) for app registration details
+- Per-user OAuth consent flow - Authorization Code + PKCE via popup control add-in
+- Token storage, silent refresh, and expiry handling per user
+- `POST /v1.0/me/sendMail` via Microsoft Graph with delegated token
+- `GET /me` call at consent time to retrieve and store the user's real home email address
+- `Email Connector v4` implementation - single fixed-GUID account (`Current User Email API`)
+- Admin token status list page (`W365 User Token List`) with consent action and token clear
+- Permission set (`W365 Guest Email`)
+- Full documentation - README, QUICKSTART, TESTING
+
+### AL Objects
 
 | ID | Object | Type | Purpose |
 |---|---|---|---|
-| 50100 | `W365 Email Setup` | Table | Client ID, tenant ID, redirect URI (admin config) |
-| 50101 | `W365 User Email Token` | Table | Per-user access token (encrypted), refresh token (encrypted), expiry datetime, user ID |
-| 50103 | `W365 Email Setup Card` | Page | Admin page - configure app registration details |
-| 50104 | `W365 User Token List` | Page | Admin list - all users, token status, trigger consent action |
-| 50105 | `W365 Graph Mail Mgt` | Codeunit | HttpClient calls to Graph - sendMail, parse errors |
-| 50106 | `W365 OAuth Mgt` | Codeunit | Build auth URL, exchange code for token, refresh token |
-| 50107 | `W365 Email Subscriber` | Codeunit | Guest detection via `#EXT#` check; Phase 2 routes email to Graph automatically |
-| 50108 | `W365 OAuth Consent` | Page (Card) | User-facing consent flow - user opens auth URL in browser, pastes full redirect URL back, code is exchanged for token |
-| 50109 | `W365 Guest Email` | PermissionSet | Grants users access to all W365 tables, pages, and codeunits |
+| 50100 | `W365 Email Setup` | Table | App registration details - App ID, Tenant ID, Redirect URI |
+| 50101 | `W365 User Email Token` | Table | Per-user consent status, token expiry, home email address |
+| 50103 | `W365 Email Setup Card` | Page | Admin setup card |
+| 50104 | `W365 User Token List` | Page | Admin list - all users, token status, consent and clear actions |
+| 50105 | `W365 Graph Mail Mgt` | Codeunit | `POST /v1.0/me/sendMail` and `GET /me` Graph calls |
+| 50106 | `W365 OAuth Mgt` | Codeunit | Auth URL builder, code exchange, token refresh |
+| 50108 | `W365 OAuth Consent` | Page | User consent flow - opens PKCE popup, stores token on return |
+| 50109 | `W365 Guest Email` | PermissionSet | Access to all W365 objects |
+| 50110 | `W365 Guest Email Connector` | Codeunit | `Email Connector`, `Email Connector v4`, `Default Email Rate Limit` implementations |
+| 50100 | `W365 Guest Email Connector` | Enum Extension | Extends `Email Connector` enum |
+| 50100 | `W365 OAuth Popup` | ControlAddin | Popup window for PKCE consent flow |
 
 ---
 
-## Development Sequence
+## Phase 2 - Email Scenarios Integration *(complete - delivered in Phase 1)*
 
-### Step 1 - Scaffold and Cleanup *(complete)*
-- Remove `HelloWorld.al`
-- Update `app.json` metadata (name, publisher, description)
-- Create folder structure: `src/Tables/`, `src/Pages/`, `src/Codeunits/`
-
-### Step 2 - Data Layer *(complete)*
-- Build `W365 Email Setup` table and card page
-- Build `W365 User Email Token` table with encrypted field handling
-
-### Step 3 - OAuth Flow *(complete)*
-- Build `W365 OAuth Mgt` codeunit - auth URL builder and code exchange
-- Build `W365 OAuth Consent` Card page - user pastes redirect URL back to complete exchange
-
-### Step 4 - Graph Send *(complete)*
-- Build `W365 Graph Mail Mgt` codeunit - send email, handle 401/429, surface errors via ErrorInfo
-
-### Step 5 - Integration
-- Build `W365 Email Subscriber` event subscriber
-- Wire up flag check: if `W365 Use Graph Email` is true on User Setup, route to Graph; otherwise pass through to native BC
-
-### Step 6 - Admin UI
-- Build `W365 User Token List` page with token status column and "Trigger Consent" action
-- Add test-send action (temporary, Phase 1 only)
-
-### Step 7 - Docs and Setup Guide
-- Azure App Registration step-by-step guide (SETUP.md)
-- Update README with architecture summary, setup steps, and limitations
+The Email Scenarios problem was solved by the single fixed-account model. A single `Email Connector v4` account is registered once, set as the system default once, and BC's Email Scenarios can be mapped to it once. Every send resolves to the correct user's Graph token at runtime via `UserSecurityId()`. No per-user scenario management required.
 
 ---
 
-## Key Technical Decisions
+## Phase 3 - Multi-Home-Tenancy Support *(next)*
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| OAuth flow | Authorization Code + PKCE (plain method for Phase 1) | Best practice for delegated flows. Plain method avoids SHA-256 byte manipulation in AL; Phase 2 upgrades to S256. |
-| RestClientOAuth library | Not used as a dependency | Arend-Jan Kauffmann's library (github.com/ajkauffmann/RestClientOAuth) handles Auth Code + PKCE well and is MIT licensed. However it is in-memory only by design - tokens are lost when the AL object lifecycle resets. Our use case requires persistent tokens (email send fires in server context with no interactive prompt). We follow the same architecture patterns but implement our own persistent layer. |
-| Token storage | IsolatedStorage (Text, encrypted at rest) | Tokens are read back as Text for HTTP headers. SecretText wrapping provides minimal additional protection since tokens originate as HTTP response Text. IsolatedStorage encrypts at rest regardless of overload. |
-| Client secret storage | IsolatedStorage (DataScope::Company) | Never in a table field. Admin sets it via a masked field on the setup card. The value is never read back to the UI. |
-| Member vs guest routing | Automatic via `#EXT#` in `User."Authentication Email"` | Entra ID always injects `#EXT#` into the UPN of every B2B guest. No manual flag, no extra Graph permissions, no User Setup extension needed. |
-| HTTP client | Native AL HttpClient | No external dependencies. |
-| Error surfacing | Error() with clear messages; Phase 2 adds ErrorInfo NavigationAction | Consistent with BC UX patterns. |
-| Redirect URI (Phase 1) | https://login.microsoftonline.com/common/oauth2/nativeclient | User pastes full redirect URL into BC. Simple for PoC; Phase 2 adds proper callback page or control add-in. |
+The current `W365 Email Setup` is a singleton - one App ID and one Host Tenant ID. This covers environments where all users authenticate against a single Entra app registration.
+
+In environments where guests come from multiple home tenancies that each require a separate app registration (e.g. due to client IT policy), Phase 3 extends the setup layer:
+
+- Change `W365 Email Setup` from singleton to row-based, keyed by home tenant domain or tenant ID
+- At token exchange time, detect the current user's home domain from their `#EXT#` UPN and look up the matching setup row
+- Admin UI updated to a list + card pattern to manage multiple registrations
+- IsolatedStorage key strategy for per-registration client secrets (keyed by App ID)
 
 ---
 
-## Security Considerations
+## Security
 
 - Tokens never appear in error messages, captions, or telemetry dimensions
-- Client secret stored via `IsolatedStorage` only - setup page writes it but never reads it back to the UI
-- Redirect URI validated against stored value on every callback - mismatch is rejected
-- Scope locked to `Mail.Send` only
+- Client secret stored in `IsolatedStorage` only - never read back to the UI after saving
+- Redirect URI validated against the stored value on every callback - mismatch is rejected
+- OAuth scope locked to `Mail.Send` only
 - Token refresh is automatic and transparent to the user
-- Consent is strictly per-user - no cross-user token sharing
+- Consent is strictly per-user - tokens are `DataScope::User` and cannot be accessed by other users or background tasks running as a different identity
 
 ---
 
-## Phase 3 - Multi-Home-Tenancy Support
+## Parking Lot
 
-Phase 1 and 2 assume all guest users belong to a **single home tenancy** and share one Entra app registration in the host tenant.
-
-In environments where guests come from **multiple different home tenancies** (e.g. guests from Contoso Ltd and guests from Fabrikam Ltd), the current architecture has a limitation: the single app registration and its delegated `Mail.Send` token works across tenants because the app is registered as multi-tenant. However, if stricter per-tenancy app registration isolation is required (e.g. by a client's IT policy), a separate Entra app registration per home tenancy would be needed.
-
-Phase 3 scope:
-- Extend `W365 Email Setup` to support multiple rows keyed by home tenant domain or tenant ID
-- Match the current user's `#EXT#` UPN home domain to the correct app registration at token exchange time
-- Admin UI to manage multiple app registrations
-- Determine whether per-tenancy client secrets are feasible within IsolatedStorage constraints
-
----
-
-## Open Questions / Parking Lot
-
-- Redirect URI approach: **Resolved** - Phase 1 uses `https://login.microsoftonline.com/common/oauth2/nativeclient` with manual paste-back on the `W365 OAuth Consent` page. Phase 2 can upgrade to a control add-in for SSO-friendly UX.
-- Attachment handling: Graph `sendMail` supports base64 inline attachments up to 4MB and upload sessions for larger files - decide on the size threshold approach for Phase 2
-- Multi-language / translation considerations for future AppSource path (not in scope now)
-
----
-
-## Phase 1 Success Criteria
-
-- A guest user can log into BC, trigger an email send (via test action), and receive that email in their inbox from their home-tenancy address
-- A member user on the same BC tenant is unaffected - their emails continue via native BC
-- No tokens are visible in any UI or log
-- The OAuth consent flow completes end-to-end in a sandbox environment
+- Attachment handling - Graph `sendMail` supports base64 inline attachments up to 4MB and upload sessions for larger files; size threshold strategy deferred to a future phase
+- PKCE S256 upgrade - current implementation uses plain method; S256 is more correct but requires SHA-256 byte handling in AL
+- Multi-language / translation - not in scope for per-tenant extension
