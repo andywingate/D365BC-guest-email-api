@@ -51,14 +51,9 @@ Example guest UPN: `user_theircompany.com#EXT#@yourtenant.onmicrosoft.com`
 
 ---
 
-## Phase 2 - Email Scenarios Integration
+## Phase 2 - Email Scenarios Integration *(complete - delivered in Phase 1)*
 
-BC's Email Scenarios feature allows routing different types of system emails (sales documents, reminders, etc.) to different email accounts. Phase 2 will:
-
-- Register a new Email Account Connector implementing the `Email Connector v4` interface (BC27+; v3 is obsolete from BC28)
-- Expose the Graph-based send as a named account type within Email Scenarios
-- Allow admins to assign guest-user Graph accounts to specific scenarios
-- Handle the consent / token status check within the connector flow
+The Email Scenarios problem was solved by the **Current User Email API** single fixed-account model. Rather than registering one account per user and requiring scenario mappings to be updated per user, a single logical account (`Email Connector v4`) is registered once. Admins set it as the system default once. BC's Email Scenarios can be mapped to it once. Every send - regardless of path - resolves to the correct user's Graph token at runtime via `UserSecurityId()`. No per-user scenario management required.
 
 ---
 
