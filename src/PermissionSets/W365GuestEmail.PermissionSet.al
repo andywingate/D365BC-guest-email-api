@@ -13,6 +13,5 @@ permissionset 50109 "W365 Guest Email"
         page "W365 OAuth Consent" = X,
         codeunit "W365 Graph Mail Mgt" = X,
         codeunit "W365 OAuth Mgt" = X,
-        codeunit "W365 Email Subscriber" = X,
         codeunit "W365 Guest Email Connector" = X;
 }
