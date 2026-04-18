@@ -1,7 +1,7 @@
 # D365BC-guest-email-api
 
-> **AI-Driven Development Experiment**
-> This project was written almost entirely by GitHub Copilot (Claude Sonnet), with direction, architecture decisions, and testing by [Andy Wingate](https://github.com/andywingate). It is an experiment in AI-assisted AL development and a proof-of-concept - **not intended for production use**. See [.github/instructions/](.github/instructions/) for the full AI context (coding standards and instructions) used throughout development.
+> **AI-Driven Proof of Concept**
+> This project was written almost entirely by GitHub Copilot (Claude Sonnet), with direction, architecture decisions, and testing by [Andy Wingate](https://github.com/andywingate). Security review and code feedback by [Arend-Jan Kauffmann](https://github.com/ajkauffmann). It is a proof-of-concept - **not yet intended for production use**. See [.github/instructions/](.github/instructions/) for the full AI context (coding standards and instructions) used throughout development.
 
 An AL extension for Microsoft Dynamics 365 Business Central that lets every user - guest or member - send email from their own work address via the Microsoft Graph API (`Mail.Send`), with zero per-user configuration by admins.
 
@@ -75,9 +75,10 @@ Phase 1 (this release) covers `Mail.Send` only. Reply, inbox retrieval, and fold
 
 ## Known limitations
 
-- **Single app registration only** - `W365 Email Setup` stores one Entra App ID and one Host Tenant ID. All users must authenticate against the same app registration. Environments where users belong to multiple home tenants that each require a separate app registration are not supported in Phase 1. Multi-tenancy support (row-based setup with per-domain or per-tenant-ID registration selection) is a Phase 2 item.
+- **Single app registration only** - `W365 Email Setup` stores one Entra App ID and one Host Tenant ID. All users must authenticate against the same app registration. Environments where users belong to multiple home tenants that each require a separate app registration are not supported in Phase 1. Multi-tenancy support (row-based setup with per-domain or per-tenant-ID registration selection) is planned for Phase 3.
 
 ## Acknowledgements
 
-Architecture patterns for OAuth flows in AL were informed by the excellent reference implementation by **Arend-Jan Kauffmann**:
-[ajkauffmann/RestClientOAuth](https://github.com/ajkauffmann/RestClientOAuth). Thank you for the help sharing this AJ!
+**Arend-Jan Kauffmann** ([ajkauffmann](https://github.com/ajkauffmann)) - security review, code feedback, and architecture guidance. AJ's review identified critical improvements around `SecretText`, `[NonDebuggable]`, `IsolatedStorage` encryption, token lifecycle, and adoption of System Application modules. These are tracked in Phase 3a of the project plan.
+
+OAuth flow architecture patterns were informed by AJ's reference implementation: [ajkauffmann/RestClientOAuth](https://github.com/ajkauffmann/RestClientOAuth).
