@@ -33,6 +33,11 @@ table 50101 "W365 User Email Token"
             Caption = 'Last Error';
             DataClassification = SystemMetadata;
         }
+        field(5; "Home Email"; Text[250])
+        {
+            Caption = 'Home Email';
+            DataClassification = EndUserIdentifiableInformation;
+        }
     }
 
     keys

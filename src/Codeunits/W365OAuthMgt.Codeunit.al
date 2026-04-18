@@ -297,8 +297,10 @@ codeunit 50106 "W365 OAuth Mgt"
     local procedure StoreTokens(AccessToken: Text; RefreshToken: Text; ExpiresInSeconds: Integer)
     var
         UserToken: Record "W365 User Email Token";
+        GraphMailMgt: Codeunit "W365 Graph Mail Mgt";
         UserName: Code[50];
         ExpiryDt: DateTime;
+        HomeEmail: Text;
     begin
         ExpiryDt := CurrentDateTime() + (ExpiresInSeconds * 1000);
 
@@ -319,6 +321,12 @@ codeunit 50106 "W365 OAuth Mgt"
         UserToken."Token Expiry" := ExpiryDt;
         UserToken."Consent Status" := "W365 Consent Status"::Active;
         UserToken."Last Error" := '';
+
+        // Fetch real home email from Graph /me and store it for display
+        HomeEmail := GraphMailMgt.GetCurrentUserEmail();
+        if HomeEmail <> '' then
+            UserToken."Home Email" := CopyStr(HomeEmail, 1, MaxStrLen(UserToken."Home Email"));
+
         UserToken.Modify();
     end;
 

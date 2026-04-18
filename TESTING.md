@@ -21,8 +21,8 @@ Before running any paths, confirm:
 2. Enter the following:
    - **App (Client) ID** - `deda566a-3ed3-4b8e-9238-e1eb3665c3f7`
    - **Host Tenant ID** - `585f2caa-d65b-4e77-92bd-f83b9697165c`
-   - **Redirect URI** - `https://login.microsoftonline.com/common/oauth2/nativeclient`
-3. In **Enter New Client Secret**, paste the secret value from `.env` and press Tab
+   - **Redirect URI** - `https://businesscentral.dynamics.com/OAuthLanding.htm`
+3. In **Enter New Client Secret**, paste the secret value and press Tab
 
 **Expected:**
 - "Client secret saved." message appears
@@ -46,31 +46,44 @@ Before running any paths, confirm:
 
 ---
 
-## Path 3 - OAuth Consent (Happy Path)
+## Path 3 - OAuth Consent via Direct Page (Happy Path)
 
-**Goal:** Complete the full consent flow and confirm a token is stored.
+**Goal:** Complete the full consent flow via the direct consent page and confirm a token is stored.
 
 1. Search BC for **W365 User Token Status**
-2. Click **Authorise (Consent Flow)**
-3. On **W365 - Authorise Email Access**:
-   - Click **Step 1 - Open Consent Page** - browser opens to Microsoft login
-   - Sign in with the guest user's home-tenancy account and click **Accept**
-   - Copy the full URL from the browser address bar (starts with `https://login.microsoftonline.com/common/oauth2/nativeclient?code=...`)
-   - Paste into **Paste Redirect URL Here**
-   - Click **Step 2 - Exchange Code**
+2. Click **Authorise (Consent Flow)** to open the **Connect Your Email** page
+3. Click **Connect my Email**
+4. A sign-in popup opens automatically - sign in with the guest user's home-tenancy account (e.g. `user@theircompany.com`) and click **Accept**
+5. The popup closes automatically
 
 **Expected:**
-- "Authorisation successful." message appears
-- **Token Status** on the consent page shows **Active**
+- Page updates to show **Connected** status without any manual URL copy/paste
 - **W365 User Token Status** list shows the user with status **Active** and a populated expiry timestamp
 
 ---
 
-## Path 4 - Send Test Email (Happy Path)
+## Path 3b - OAuth Consent via Email Accounts Wizard
 
-**Goal:** Confirm an email is sent from the guest user's home-tenancy address via Microsoft Graph.
+**Goal:** Complete the full consent flow via BC's native Set Up Email Account wizard.
 
-1. On **W365 - Authorise Email Access** (or re-open from User Token Status > Authorise)
+1. Search BC for **Email Accounts** and click **New**
+2. Select **Guest Email (Microsoft Graph)** from the account type list and click **Next**
+3. The **Connect Your Email** page opens - click **Connect my Email**
+4. Sign in with the guest user's home-tenancy account in the popup and click **Accept**
+5. Click **Next** then **Finish** in the wizard
+
+**Expected:**
+- The wizard completes and the account appears in the **Email Accounts** list
+- Account name shows the user's display name; email address shows their UPN
+- Account type shows **Guest Email (Microsoft Graph)**
+
+---
+
+## Path 4 - Send Test Email via Connect Your Email Page
+
+**Goal:** Confirm an email is sent from the guest user's home-tenancy address via the consent page.
+
+1. On the **Connect Your Email** page (after a successful consent), scroll to the **Test Email** section
 2. Enter your own email address in **Test Recipient Address**
 3. Click **Send Test Email**
 
@@ -78,6 +91,35 @@ Before running any paths, confirm:
 - "Test email sent successfully via Microsoft Graph." message appears
 - Email arrives in the recipient inbox
 - The **From** address is the guest user's home-tenancy address (e.g. `user@theircompany.com`), not a BC host tenant address
+
+---
+
+## Path 4b - Send Test Email via Email Accounts Page
+
+**Goal:** Confirm BC's native Send Test Email works through the connector.
+
+1. Search BC for **Email Accounts**
+2. Select the guest user's account row
+3. Click **Send Test Email** from the action bar
+
+**Expected:**
+- BC sends a test email using the connector
+- Email arrives in the recipient inbox from the guest user's home-tenancy address
+- No errors in BC
+
+---
+
+## Path 4c - Email Connector Account Information
+
+**Goal:** Confirm Show Account Information opens the correct page.
+
+1. Search BC for **Email Accounts**
+2. Select the guest user's account row
+3. Click **Show Account Information** (or open account details)
+
+**Expected:**
+- The **Connect Your Email** page opens for the current user
+- Connected status and user details are shown correctly
 
 ---
 

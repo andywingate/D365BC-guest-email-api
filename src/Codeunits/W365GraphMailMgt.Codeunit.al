@@ -12,6 +12,53 @@ codeunit 50105 "W365 Graph Mail Mgt"
     // -------------------------------------------------------------------------
 
     /// <summary>
+    /// Calls Graph /me and returns the authenticated user's mail address.
+    /// Used after token exchange to populate the Home Email field on the token record.
+    /// Returns empty string on any failure - non-fatal, falls back to BC username display.
+    /// </summary>
+    procedure GetCurrentUserEmail(): Text
+    var
+        HttpClient: HttpClient;
+        HttpReqMsg: HttpRequestMessage;
+        HttpRespMsg: HttpResponseMessage;
+        ReqHeaders: HttpHeaders;
+        ResponseText: Text;
+        JsonObj: JsonObject;
+        JsonToken: JsonToken;
+        AccessToken: Text;
+        MeEndpoint: Label 'https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', Locked = true;
+    begin
+        if not OAuthMgt.GetAccessToken(AccessToken) then
+            exit('');
+
+        HttpReqMsg.Method := 'GET';
+        HttpReqMsg.SetRequestUri(MeEndpoint);
+        HttpReqMsg.GetHeaders(ReqHeaders);
+        ReqHeaders.Add('Authorization', 'Bearer ' + AccessToken);
+        ReqHeaders.Add('Accept', 'application/json');
+
+        if not HttpClient.Send(HttpReqMsg, HttpRespMsg) then
+            exit('');
+
+        if not HttpRespMsg.IsSuccessStatusCode() then
+            exit('');
+
+        HttpRespMsg.Content.ReadAs(ResponseText);
+        if not JsonObj.ReadFrom(ResponseText) then
+            exit('');
+
+        // Prefer 'mail' (SMTP address); fall back to 'userPrincipalName'
+        if JsonObj.Get('mail', JsonToken) then
+            if JsonToken.AsValue().AsText() <> '' then
+                exit(JsonToken.AsValue().AsText());
+
+        if JsonObj.Get('userPrincipalName', JsonToken) then
+            exit(JsonToken.AsValue().AsText());
+
+        exit('');
+    end;
+
+    /// <summary>
     /// Sends an email via Microsoft Graph using the current user's delegated token.
     /// Returns true on success. Raises an error (with consent action) if no token exists.
     /// </summary>

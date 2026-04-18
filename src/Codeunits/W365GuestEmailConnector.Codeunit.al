@@ -45,6 +45,7 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
     var
         UserToken: Record "W365 User Email Token";
         User: Record User;
+        GuestUserLbl: Label 'Guest User', Locked = true;
     begin
         if UserToken.FindSet() then
             repeat
@@ -53,8 +54,11 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
                     if User.FindFirst() then begin
                         EmailAccount.Init();
                         EmailAccount."Account Id" := User."User Security ID";
-                        EmailAccount.Name := CopyStr(User."Full Name", 1, MaxStrLen(EmailAccount.Name));
-                        EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
+                        EmailAccount.Name := GuestUserLbl;
+                        if UserToken."Home Email" <> '' then
+                            EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
+                        else
+                            EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
                         EmailAccount.Connector := Enum::"Email Connector"::"W365 Guest Email";
                         if EmailAccount.Insert() then;
                     end;
@@ -68,7 +72,7 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
     /// </summary>
     procedure ShowAccountInformation(AccountId: Guid)
     begin
-        Page.Run(Page::"W365 OAuth Consent");
+        // No account information page - the Email Accounts list row is sufficient
     end;
 
     /// <summary>

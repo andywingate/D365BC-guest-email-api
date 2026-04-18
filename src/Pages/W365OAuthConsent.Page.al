@@ -2,7 +2,7 @@ namespace Wingate365.GuestEmailAPI;
 
 page 50108 "W365 OAuth Consent"
 {
-    Caption = 'Connect Your Email';
+    Caption = 'Connect Guest Email';
     PageType = Card;
     UsageCategory = Tasks;
     ApplicationArea = All;
@@ -24,7 +24,7 @@ page 50108 "W365 OAuth Consent"
                 field(StatusNotConnectedField; StatusMessage)
                 {
                     ApplicationArea = All;
-                    Caption = 'Status';
+                    Caption = ' ';
                     Editable = false;
                     StyleExpr = TokenStatusStyle;
                     ToolTip = 'Your current connection status.';
@@ -43,29 +43,10 @@ page 50108 "W365 OAuth Consent"
                 field(StatusConnectedField; StatusMessage)
                 {
                     ApplicationArea = All;
-                    Caption = 'Status';
+                    Caption = ' ';
                     Editable = false;
                     StyleExpr = TokenStatusStyle;
                     ToolTip = 'Your current connection status.';
-                }
-                field(TokenExpiryField; TokenExpiryDisplay)
-                {
-                    ApplicationArea = All;
-                    Caption = 'Connected Until';
-                    Editable = false;
-                    ToolTip = 'When the connection token expires. It will renew automatically when you next send an email.';
-                }
-                group(TestEmailGroup)
-                {
-                    Caption = 'Send a Test Email';
-                    InstructionalText = 'Want to confirm it is working? Enter an address below and click Send Test Email.';
-
-                    field(TestRecipientField; TestRecipientEmail)
-                    {
-                        ApplicationArea = All;
-                        Caption = 'Send Test To';
-                        ToolTip = 'The email address to send the test message to.';
-                    }
                 }
             }
             group(AddinGroup)
@@ -126,31 +107,6 @@ page 50108 "W365 OAuth Consent"
                     CurrPage.OAuthPopup.OpenAuthPopup(OAuthMgt.GetAuthorizationUrl());
                 end;
             }
-            action(SendTestEmail)
-            {
-                ApplicationArea = All;
-                Caption = 'Send Test Email';
-                Image = SendMail;
-                Enabled = TokenIsActive;
-                ToolTip = 'Sends a test email to confirm your connection is working.';
-
-                trigger OnAction()
-                var
-                    GraphMailMgt: Codeunit "W365 Graph Mail Mgt";
-                    SuccessMsg: Label 'Test email sent! Check your inbox to confirm it arrived.';
-                    EmptyRecipientErr: Label 'Please enter an address in the Send Test To field first.';
-                begin
-                    if TestRecipientEmail = '' then
-                        Error(EmptyRecipientErr);
-
-                    GraphMailMgt.SendEmail(
-                        TestRecipientEmail,
-                        'W365 Guest Email - Connection Test',
-                        '<p>Your Business Central email connection is working. This test was sent via Microsoft Graph using your work identity.</p>'
-                    );
-                    Message(SuccessMsg);
-                end;
-            }
             action(DisconnectAction)
             {
                 ApplicationArea = All;
@@ -171,11 +127,24 @@ page 50108 "W365 OAuth Consent"
                     end;
                 end;
             }
+            action(TestConnectionAction)
+            {
+                ApplicationArea = All;
+                Caption = 'Email Accounts';
+                Image = LaunchWeb;
+                Enabled = TokenIsActive;
+                ToolTip = 'Opens the Email Accounts page.';
+
+                trigger OnAction()
+                begin
+                    Page.Run(8887);
+                end;
+            }
         }
         area(Promoted)
         {
             actionref(ConnectRef; ConnectAction) { }
-            actionref(TestRef; SendTestEmail) { }
+            actionref(TestConnectionRef; TestConnectionAction) { }
             actionref(DisconnectRef; DisconnectAction) { }
         }
     }
@@ -189,7 +158,6 @@ page 50108 "W365 OAuth Consent"
         StatusMessage: Text;
         TokenExpiryDisplay: Text;
         TokenStatusStyle: Text;
-        TestRecipientEmail: Text[250];
         TokenIsActive: Boolean;
 
     local procedure LoadStatus()
@@ -197,8 +165,8 @@ page 50108 "W365 OAuth Consent"
         UserToken: Record "W365 User Email Token";
         UserName: Code[50];
         ConnectedTxt: Label 'Connected';
-        ExpiredTxt: Label 'Connected - renewing on next send';
-        ErrorTxt: Label 'Connection error - please disconnect and reconnect';
+        ExpiredTxt: Label 'Connected';
+        ErrorTxt: Label 'Not connected - please disconnect and reconnect';
         NoneTxt: Label 'Not connected';
     begin
         UserName := CopyStr(UserId(), 1, MaxStrLen(UserName));

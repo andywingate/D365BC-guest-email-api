@@ -101,16 +101,25 @@ Each guest user needs the **W365 Guest Email** permission set before they can ac
 
 Each guest user completes a one-time OAuth consent step after signing in to BC. The app automatically identifies them as a guest - no admin configuration per user is required.
 
-1. The guest user signs in to BC with their own account
-2. Search BC for **W365 User Token Status** (or use the **User Tokens** action from the W365 Email Setup Card)
-3. Click **Authorise (Consent Flow)** to open the consent page
-4. On the **W365 - Authorise Email Access** page:
-   - Click **Step 1 - Open Consent Page** - a browser tab opens to the Microsoft login page
-   - Sign in with their **home-tenancy work account** (e.g. `user@theircompany.com`) and click **Accept**
-   - After redirect, you will land on the BC OAuth landing page - copy the **full URL** from the browser address bar (starts with `https://businesscentral.dynamics.com/OAuthLanding.htm?code=...`)
-   - Paste the full URL into the **Paste Redirect URL Here** field in BC
-   - Click **Step 2 - Exchange Code**
-5. A success message confirms the token was stored. The **W365 User Token Status** list will show the user's status as **Active** with an expiry timestamp.
+There are two entry points for the consent flow - both open the same **Connect Your Email** page:
+
+### Option A - via Email Accounts (recommended)
+
+1. Search BC for **Email Accounts** and open the page
+2. Click **New** to open the **Set Up Email Account** wizard
+3. Select **Guest Email (Microsoft Graph)** from the account type list and click **Next**
+4. The **Connect Your Email** page opens - click **Connect my Email**
+5. A sign-in popup opens automatically - sign in with the guest user's **home-tenancy work account** (e.g. `user@theircompany.com`) and click **Accept**
+6. The popup closes and the page updates to show **Connected**
+7. Click **Next** then **Finish** in the wizard
+
+### Option B - direct consent page
+
+1. Search BC for **W365 User Token Status** (or use the **User Tokens** action from the W365 Email Setup Card)
+2. Click **Authorise (Consent Flow)** to open the **Connect Your Email** page
+3. Click **Connect my Email**
+4. A sign-in popup opens automatically - sign in with the guest user's home-tenancy account and click **Accept**
+5. The popup closes and the page shows **Connected**
 
 Tokens are refreshed automatically before they expire. Users should not need to repeat this process unless they explicitly disconnect or their refresh token is revoked.
 
@@ -118,9 +127,37 @@ Tokens are refreshed automatically before they expire. Users should not need to 
 
 ## Part 5 - Verify with a Test Email
 
-1. On the **W365 - Authorise Email Access** page, enter an email address in **Test Recipient Address**
-2. Click **Send Test Email**
-3. The recipient should receive an email **sent from the guest user's home-tenancy address** (e.g. `user@theircompany.com`) - not from the BC host tenant
+### Option A - via BC native Email (recommended)
+
+1. Search BC for **Email Accounts** and find the guest user's account
+2. Select it and click **Send Test Email** from the action bar
+3. BC sends a test message using the connector - the recipient receives an email **from the guest user's home-tenancy address**
+
+### Option B - via the Connect Your Email page
+
+1. Open the **Connect Your Email** page (search **W365 User Token Status** > **Authorise**)
+2. Scroll to **Test Email** and enter a recipient address
+3. Click **Send Test Email**
+4. The recipient should receive an email **from the guest user's home-tenancy address** (e.g. `user@theircompany.com`) - not from the BC host tenant
+
+---
+
+## Part 6 - Email Accounts Integration
+
+The extension registers itself as a native BC email connector. Once deployed, it appears alongside Microsoft 365, SMTP, and Current User on the **Email Accounts** page.
+
+### What this gives you out of the box
+
+- Guest users appear as named email accounts in **Email Accounts**
+- BC's **Send Test Email** works directly from the accounts page
+- Email Scenarios can be assigned to the connector (e.g. route sales invoices through guest addresses)
+- The **Set Up Email Account** wizard walks users through consent automatically
+
+### Email Scenarios (optional)
+
+1. Search BC for **Email Scenarios**
+2. Assign the **Guest Email (Microsoft Graph)** account to any scenario where guest users should be the sender
+3. BC will automatically use the guest user's account when sending emails for those scenarios
 
 ---
 
