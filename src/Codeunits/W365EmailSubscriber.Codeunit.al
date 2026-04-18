@@ -1,6 +1,5 @@
 namespace Wingate365.GuestEmailAPI;
 
-using System.Email;
 using System.Security.AccessControl;
 
 codeunit 50107 "W365 Email Subscriber"
@@ -15,7 +14,7 @@ codeunit 50107 "W365 Email Subscriber"
     /// Returns true if the current user is an Entra B2B guest in this tenant.
     /// Detection is automatic: Entra always places #EXT# in the Authentication
     /// Email (UPN) of guest accounts. No manual flagging is required.
-    /// Member accounts with a native UPN return false and use native BC email.
+    /// Member accounts with a native UPN return false.
     /// </summary>
     procedure IsGuestUser(): Boolean
     var

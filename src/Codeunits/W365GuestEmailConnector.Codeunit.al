@@ -38,32 +38,50 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
     end;
 
     /// <summary>
-    /// Returns one email account per user who has an active token.
-    /// BC uses this list to populate the Email Accounts page.
+    /// Returns one account with a fixed well-known GUID - the same pattern as BC's built-in
+    /// "Current User" connector. There is only ever one entry in Email Accounts; set it as
+    /// the system default once and every user's sends resolve to their own Graph token at
+    /// runtime via UserSecurityId(). The email address shown reflects the current user's
+    /// home address from their stored token, so each user sees their own address.
     /// </summary>
     procedure GetAccounts(var EmailAccount: Record "Email Account")
     var
         UserToken: Record "W365 User Email Token";
-        User: Record User;
-        GuestUserLbl: Label 'Guest User', Locked = true;
+        UserName: Code[50];
+        AccountNameLbl: Label 'Current User Email API', Locked = true;
+        NotConnectedLbl: Label '(not connected - run Email Account Setup)', Locked = true;
     begin
-        if UserToken.FindSet() then
-            repeat
-                if UserToken."Consent Status" = "W365 Consent Status"::Active then begin
-                    User.SetRange("User Name", UserToken."User Name");
-                    if User.FindFirst() then begin
-                        EmailAccount.Init();
-                        EmailAccount."Account Id" := User."User Security ID";
-                        EmailAccount.Name := GuestUserLbl;
-                        if UserToken."Home Email" <> '' then
-                            EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
-                        else
-                            EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
-                        EmailAccount.Connector := Enum::"Email Connector"::"W365 Guest Email";
-                        if EmailAccount.Insert() then;
-                    end;
-                end;
-            until UserToken.Next() = 0;
+        EmailAccount.Init();
+        EmailAccount."Account Id" := GetFixedAccountId();
+        EmailAccount.Name := AccountNameLbl;
+        EmailAccount.Connector := Enum::"Email Connector"::"W365 Guest Email";
+
+        // Show the current user's home email if they have an active token;
+        // otherwise show a placeholder so the account is still visible and
+        // can be set as default before users have individually consented.
+        UserName := CopyStr(UserId(), 1, MaxStrLen(UserName));
+        if UserToken.Get(UserName) and (UserToken."Consent Status" = "W365 Consent Status"::Active) then begin
+            if UserToken."Home Email" <> '' then
+                EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
+            else
+                EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
+        end else
+            EmailAccount."Email Address" := CopyStr(NotConnectedLbl, 1, MaxStrLen(EmailAccount."Email Address"));
+
+        if EmailAccount.Insert() then;
+    end;
+
+    /// <summary>
+    /// Fixed well-known GUID used as the single Account Id for this connector.
+    /// All users share this one logical account; the connector resolves the actual
+    /// sender credentials at send time via UserSecurityId().
+    /// </summary>
+    local procedure GetFixedAccountId(): Guid
+    var
+        AccountId: Guid;
+    begin
+        Evaluate(AccountId, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+        exit(AccountId);
     end;
 
     /// <summary>
@@ -83,7 +101,6 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
     procedure RegisterAccount(var EmailAccount: Record "Email Account"): Boolean
     var
         UserToken: Record "W365 User Email Token";
-        User: Record User;
         UserName: Code[50];
         Setup: Record "W365 Email Setup";
         NoSetupErr: Label 'W365 Email Setup has not been configured. Ask your administrator to complete the setup first.';
@@ -100,11 +117,12 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
         if UserToken."Consent Status" <> "W365 Consent Status"::Active then
             exit(false);
 
-        User.SetRange("User Name", UserName);
-        if User.FindFirst() then
-            EmailAccount."Account Id" := User."User Security ID";
-        EmailAccount.Name := CopyStr(UserId(), 1, MaxStrLen(EmailAccount.Name));
-        EmailAccount."Email Address" := CopyStr(UserId(), 1, MaxStrLen(EmailAccount."Email Address"));
+        EmailAccount."Account Id" := GetFixedAccountId();
+        if UserToken."Home Email" <> '' then
+            EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
+        else
+            EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
+        EmailAccount.Name := 'Current User Email API';
         EmailAccount.Connector := Enum::"Email Connector"::"W365 Guest Email";
         exit(true);
     end;
@@ -137,7 +155,7 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
     /// </summary>
     procedure GetDescription(): Text[250]
     begin
-        exit('Send emails from Business Central using your own work address via Microsoft Graph. For guest users in this tenant.');
+        exit('Send emails from Business Central using your own work address via Microsoft Graph. One account - each user sends as themselves.');
     end;
 
     // =========================================================================

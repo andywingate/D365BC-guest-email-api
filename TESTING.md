@@ -68,14 +68,14 @@ Before running any paths, confirm:
 
 1. Search BC for **Email Accounts** and click **New**
 2. Select **Guest Email (Microsoft Graph)** from the account type list and click **Next**
-3. The **Connect Your Email** page opens - click **Connect my Email**
-4. Sign in with the guest user's home-tenancy account in the popup and click **Accept**
+3. The **Connect Guest Email** page opens - click **Connect my Email**
+4. Sign in with your home-tenancy account in the popup and click **Accept**
 5. Click **Next** then **Finish** in the wizard
 
 **Expected:**
-- The wizard completes and the account appears in the **Email Accounts** list
-- Account name shows the user's display name; email address shows their UPN
-- Account type shows **Guest Email (Microsoft Graph)**
+- The wizard completes and returns to Email Accounts
+- The single **Current User Email API** account row is present (or remains present if already created)
+- Account email address now shows your home-tenancy address (was "not connected" before consent)
 
 ---
 
@@ -99,27 +99,27 @@ Before running any paths, confirm:
 **Goal:** Confirm BC's native Send Test Email works through the connector.
 
 1. Search BC for **Email Accounts**
-2. Select the guest user's account row
+2. Select the **Current User Email API** account row
 3. Click **Send Test Email** from the action bar
 
 **Expected:**
 - BC sends a test email using the connector
-- Email arrives in the recipient inbox from the guest user's home-tenancy address
+- Email arrives in the recipient inbox from your home-tenancy address
 - No errors in BC
 
 ---
 
 ## Path 4c - Email Connector Account Information
 
-**Goal:** Confirm Show Account Information opens the correct page.
+**Goal:** Confirm Show Account Information is a no-op (by design).
 
 1. Search BC for **Email Accounts**
-2. Select the guest user's account row
-3. Click **Show Account Information** (or open account details)
+2. Select the **Current User Email API** account row
+3. Click **Show Account Information**
 
 **Expected:**
-- The **Connect Your Email** page opens for the current user
-- Connected status and user details are shown correctly
+- Nothing opens - this is intentional. The account row itself shows all relevant status.
+- No errors
 
 ---
 
@@ -150,21 +150,24 @@ Before running any paths, confirm:
 
 ---
 
-## Path 7 - IsGuestUser Auto-Detection Logic
+## Path 7 - Single Account / Current User Model
 
-**Goal:** Confirm that `IsGuestUser()` in `W365 Email Subscriber` correctly identifies guest vs member accounts.
+**Goal:** Confirm that all users' sends route through their own token via the single fixed account.
 
-This is verified indirectly via Path 2 (visual inspection of Authentication Email) and the test email flow:
+1. Complete the consent flow (Path 3) as user A
+2. Complete the consent flow (Path 3) as user B (different session)
+3. As user A, send a test email - confirm it arrives from user A's home address
+4. As user B, send a test email - confirm it arrives from user B's home address
+5. Confirm there is still only **one** row in **Email Accounts** (Current User Email API)
 
-1. Complete the consent flow as a **guest** user (Path 3) and confirm Send Test Email works
-2. Attempt to open the consent page as a **member** account - the token list may show them but Phase 2 will restrict routing automatically
-
-The `#EXT#` detection requires no admin action. It is a read of `User."Authentication Email"` via `UserSecurityId()`. No User Setup record or custom flag is involved.
+**Expected:**
+- One account row exists regardless of how many users have consented
+- Each user's send resolves to their own Graph token at runtime
+- A user who has not consented gets an error at send time (token not found) - correct signal to run consent flow
 
 ---
 
 ## Notes
 
 - Automated AL test codeunits are not included in Phase 1 - the OAuth consent flow requires a real browser session that cannot be simulated in automated tests
-- Phase 2 (email connector integration) will introduce testable unit logic that warrants dedicated test codeunits
-- Token refresh is tested implicitly - after a successful consent, wait for the access token to expire (typically 1 hour) and confirm the next Send Test Email still succeeds without re-consenting
+- Token refresh is tested implicitly - after a successful consent, wait for the access token to expire (typically 1 hour) and confirm the next send still succeeds without re-consenting

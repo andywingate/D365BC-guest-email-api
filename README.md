@@ -1,23 +1,76 @@
 # D365BC-guest-email-api
 
-An AL extension for Microsoft Dynamics 365 Business Central that allows Microsoft Entra guest users to send email from their home-tenancy address via the Microsoft Graph API (`mail.Send`), bypassing the limitation where the built-in "current user" email account does not work for guest/cross-tenant identities.
+An AL extension for Microsoft Dynamics 365 Business Central that lets every user - guest or member - send email from their own work address via the Microsoft Graph API (`Mail.Send`), with zero per-user configuration by admins.
 
-## Overview
+## The Problem
 
-Guest accounts logging into Business Central from a different Entra tenant cannot use BC's native current-user email connector. This extension implements an OAuth 2.0 Authorization Code + PKCE flow to obtain a delegated `Mail.Send` token for each user, persisted in IsolatedStorage, and routes outbound email through the Microsoft Graph API (`POST /v1.0/me/sendMail`) for users flagged as guests in User Setup.
+Business Central's built-in email connectors do not work cleanly in multi-tenant scenarios:
+
+- **"Current User"** (built-in) - works only for accounts native to the BC host tenant. Entra B2B guest users have a cross-tenant identity; BC cannot obtain a `Mail.Send` token for them using this connector.
+- **Microsoft 365 / SMTP** - sends from a shared mailbox or service account, not from the individual user's own address. For guest users this means either email is not sent at all, or it arrives from a generic address that has no meaning to the recipient.
+
+The result: guest users in BC either cannot send email, or their email arrives from the wrong address - causing confusion for customers, poor traceability, and broken workflows.
+
+## The Solution
+
+This extension implements the **"Current User" pattern** for Microsoft Graph - one logical account, every user sends as themselves.
+
+A single email account called **Current User Email API** is registered with BC's email framework. An admin sets it as the system default **once**. After that, every user who completes a one-time OAuth consent flow can send email from BC using their own home-tenancy address - whether they are a guest (`user@partner.com`) or a member of the host tenant.
+
+When any email is sent in BC - compose dialog, customer statements, scheduled reports, background jobs, ISV extensions - the connector resolves the correct Graph token for the current user at send time using `UserSecurityId()`. No per-user account management, no routing flags, no admin action per user.
 
 ## Architecture
 
-- **OAuth token acquisition** — Authorization Code + PKCE via a consent page in BC
-- **Token persistence** — `IsolatedStorage` (per-user scope) so tokens survive server restarts
-- **Email routing** — `W365 Use Graph Email` flag on User Setup routes traffic to Graph instead of native SMTP
-- **Admin setup** — Entra App ID, Tenant ID, and Redirect URI stored in a dedicated setup table; client secret stored separately in `IsolatedStorage` (company scope)
+```
+[BC Email Framework]
+       |
+       | sets as default once
+       v
+[Current User Email API]  <-- single fixed-GUID account
+       |
+       | at send time, looks up token for UserSecurityId()
+       v
+[W365 User Email Token]  <-- one row per user, DataScope::User
+       |
+       | calls Graph with delegated token
+       v
+[POST /v1.0/me/sendMail]  <-- sends as the user's home-tenancy identity
+```
+
+### Key components
+
+| Component | Purpose |
+|---|---|
+| `W365 Guest Email Connector` | Implements `Email Connector`, `Email Connector v4`, `Default Email Rate Limit`. `GetAccounts()` returns one fixed-GUID account. `Send()` resolves the current user's token at runtime. |
+| `W365 OAuth Mgt` | Authorization Code + PKCE flow. Exchanges the auth code for access/refresh tokens and stores them in `IsolatedStorage` (per-user scope). Handles silent refresh before expiry. |
+| `W365 Graph Mail Mgt` | Calls `POST /v1.0/me/sendMail` and `GET /me` (to fetch the user's real home email address after consent). |
+| `W365 User Email Token` | One row per user. Stores consent status, token expiry, and the user's home email address. Keyed by `User Name`. |
+| `W365 OAuth Consent` page | The consent page users complete once. Opens a sign-in popup using PKCE; on return stores the token. |
+| `W365 Email Setup` | Admin-only setup card. Stores Entra App ID, Host Tenant ID, and Redirect URI. Client secret stored separately in `IsolatedStorage` (company scope). |
+
+### Token model
+
+- Tokens are stored in `IsolatedStorage` with `DataScope::User` - each user's token is private to them and cannot be accessed by other users or by background tasks running as a different identity.
+- Access tokens are refreshed silently before expiry using the stored refresh token. Users do not need to re-consent unless they explicitly disconnect or the refresh token is revoked by an admin.
+- The `Home Email` field on `W365 User Email Token` stores the user's real address from `GET /me`, populated at consent time. This is what BC displays in the Email Accounts page and in the compose dialog "From" field.
+
+## Setup
+
+See [QUICKSTART.md](QUICKSTART.md) for full step-by-step instructions. The short version:
+
+1. Create an Entra app registration with `Mail.Send` delegated permission
+2. Deploy this extension to BC
+3. Open **W365 Email Setup** and enter the app registration details
+4. Open **Email Accounts**, find **Current User Email API**, and click **Set as Default**
+5. Each user opens the **Connect Guest Email** page and completes the one-time consent popup
+
+## Intended use
+
+This extension is designed for BC environments where most or all users are Entra B2B guests - for example, a BC tenant hosted by a partner or shared services organisation where end-users sign in from their own company accounts. It also works for member accounts in the host tenant; the OAuth flow is the same regardless of guest status.
+
+Phase 1 (this release) covers `Mail.Send` only. Reply, inbox retrieval, and folder management are not implemented.
 
 ## Acknowledgements
 
 Architecture patterns for OAuth flows in AL were informed by the excellent reference implementation by **Arend-Jan Kauffmann**:
-[ajkauffmann/RestClientOAuth](https://github.com/ajkauffmann/RestClientOAuth)
-
-> Note: RestClientOAuth was evaluated as a direct dependency but not adopted, as it stores tokens in-memory only. This extension implements its own persistent token layer using `IsolatedStorage` to support server-side email sending where the consent page session and the send context are separate.
-
-Thanks AJ for the inspiration and for making your work publicly available.
+[ajkauffmann/RestClientOAuth](https://github.com/ajkauffmann/RestClientOAuth). Thank you for the help sharing this AJ!
