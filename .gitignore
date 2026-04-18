@@ -20,3 +20,7 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+# Local environment secrets - never commit
+.env
+.env.local
