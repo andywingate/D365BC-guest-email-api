@@ -1,17 +1,17 @@
 ---
-description: "Project-specific AL settings for this BC Guest Email app. Universal AL coding standards are defined in the user-level al-coding-standards.instructions.md."
+description: "Project-specific AL settings for this BC Current User Email API app. Universal AL coding standards are defined in al-coding-standards-universal.instructions.md in this same folder."
 applyTo: "**/*.al"
 ---
 
-# AL Project Settings - BC Guest Email (Per-User Email via Microsoft Graph)
+# AL Project Settings - Current User Email API (Per-User Email via Microsoft Graph)
 
 Universal AL coding standards apply to this project. The following project-specific rules override or extend them.
 
 ## Project Purpose
 
-Open source Business Central app that enables BC tenant guest users to send emails from their own home-tenancy email address (e.g. `user@theircompany.com`) rather than being blocked or forced to use the host tenant identity.
+Open source Business Central app that enables every user - guest or member - to send emails from their own work address via the Microsoft Graph API (`Mail.Send`), with zero per-user configuration by admins.
 
-Admins configure a central setup. Each guest user completes a one-time OAuth consent step to grant the app a delegated Microsoft Graph `Mail.Send` permission token. After that, emails sent from BC use that user's identity automatically with no further action required.
+A single email account called **Current User Email API** is registered with BC's email framework. An admin sets it as the system default once. Every user completes a one-time OAuth consent flow; after that, all BC email sends - compose dialog, customer statements, scheduled reports, background jobs, ISV extensions - use that user's own identity automatically. No per-user account management required.
 
 ## Project Context
 
@@ -21,6 +21,7 @@ Admins configure a central setup. Each guest user completes a one-time OAuth con
 - **Publisher**: Default Publisher
 - **Object prefix**: `W365` - all custom object names, field names, and enum values must begin with `W365` (e.g., `W365 Email Setup`, `W365 User Token`)
 - **Open source**: no AppSource submission planned - per-tenant extension rules apply
+- **Account model**: single fixed-GUID account (`a1b2c3d4-e5f6-7890-abcd-ef1234567890`) - one logical account, credentials resolved per-user at send time via `UserSecurityId()`
 
 ## Key Domain Objects
 
@@ -29,12 +30,15 @@ These are the expected core objects. New objects must follow this design:
 | Object | Type | Purpose |
 |---|---|---|
 | `W365 Email Setup` | Table | Central admin configuration - Azure App Registration client ID, tenant ID, redirect URI |
-| `W365 User Email Token` | Table | Per-user OAuth token store - user ID, access token, refresh token, expiry |
+| `W365 User Email Token` | Table | Per-user token store - consent status, token expiry, home email address. Keyed by User Name |
 | `W365 Email Setup Card` | Page | Admin page to configure the Azure App Registration |
 | `W365 User Token List` | Page | Admin view of all users and their token status |
-| `W365 Graph Mail Mgt` | Codeunit | Microsoft Graph API calls - send email using delegated token |
-| `W365 OAuth Mgt` | Codeunit | OAuth 2.0 flow - build auth URL, exchange code for token, refresh token |
-| `W365 Email Subscriber` | Codeunit | Event subscriber hooking into BC email sending pipeline |
+| `W365 Graph Mail Mgt` | Codeunit | Microsoft Graph API calls - `POST /v1.0/me/sendMail` and `GET /me` (fetches home email after consent) |
+| `W365 OAuth Mgt` | Codeunit | OAuth 2.0 Authorization Code + PKCE flow - build auth URL, exchange code for token, refresh token |
+| `W365 Guest Email Connector` | Codeunit | Implements `Email Connector`, `Email Connector v4`, `Default Email Rate Limit`. `GetAccounts()` returns one fixed-GUID account. `Send()` resolves the current user's token via `UserSecurityId()` at runtime |
+| `W365 Email Subscriber` | Codeunit | Thin helper - `IsGuestUser()` utility only. No event subscriptions |
+| `W365 OAuth Consent` | Page | One-time user consent page - opens PKCE sign-in popup, stores token on return |
+| `W365 Guest Email` | Enum | `Email Connector` enum extension value for this connector |
 
 ## Security Rules
 
@@ -69,8 +73,10 @@ The one-time user consent flow uses the Authorization Code flow with PKCE:
 5. `W365 OAuth Mgt` exchanges the code for access + refresh tokens and stores them in `W365 User Email Token` (encrypted)
 6. Subsequent email sends use the stored token; refresh automatically on expiry
 
-## Event Integration
+## Email Connector Pattern
 
-- Hook into BC's email sending pipeline using `OnBeforeSendEmail` or equivalent events from codeunit `Email` (base app)
-- The subscriber should check whether the current user has a valid token in `W365 User Email Token`; if not, prompt for consent rather than failing silently
-- Do not replace BC's native email for system/admin emails - only intercept outbound user-context emails
+- This app uses the `Email Connector` interface - it does NOT subscribe to email pipeline events
+- `GetAccounts()` must always return exactly one account with the fixed GUID. Do not add per-user accounts
+- `Send()` must resolve the token using `UserSecurityId()` at call time - the correct user's token is always in scope
+- There is no need to intercept or redirect email routing; BC routes to this connector because it is set as the system default
+- `ShowAccountInformation()` is intentionally a no-op - the Email Accounts list row is sufficient
