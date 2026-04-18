@@ -63,18 +63,6 @@ page 50104 "W365 User Token List"
                     Page.Run(Page::"W365 OAuth Consent");
                 end;
             }
-            action(SendTestEmail)
-            {
-                ApplicationArea = All;
-                Caption = 'Send Test Email';
-                Image = SendMail;
-                ToolTip = 'Opens the OAuth Consent page where you can enter a recipient address and send a test email via Microsoft Graph.';
-
-                trigger OnAction()
-                begin
-                    Page.Run(Page::"W365 OAuth Consent");
-                end;
-            }
             action(ClearToken)
             {
                 ApplicationArea = All;
@@ -108,7 +96,6 @@ page 50104 "W365 User Token List"
         area(Promoted)
         {
             actionref(StartConsentRef; StartConsent) { }
-            actionref(SendTestEmailRef; SendTestEmail) { }
         }
     }
 
