@@ -65,13 +65,17 @@ See [QUICKSTART.md](QUICKSTART.md) for full step-by-step instructions. The short
 2. Deploy this extension to BC
 3. Open **W365 Email Setup** and enter the app registration details
 4. Open **Email Accounts**, find **Current User Email API**, and click **Set as Default**
-5. Each user opens the **Connect Guest Email** page and completes the one-time consent popup
+5. Each user opens the **Connect Current User Email API** page and completes the one-time consent popup
 
 ## Intended use
 
 This extension is designed for BC environments where most or all users are Entra B2B guests - for example, a BC tenant hosted by a partner or shared services organisation where end-users sign in from their own company accounts. It also works for member accounts in the host tenant; the OAuth flow is the same regardless of guest status.
 
 Phase 1 (this release) covers `Mail.Send` only. Reply, inbox retrieval, and folder management are not implemented.
+
+## Known limitations
+
+- **Single app registration only** - `W365 Email Setup` stores one Entra App ID and one Host Tenant ID. All users must authenticate against the same app registration. Environments where users belong to multiple home tenants that each require a separate app registration are not supported in Phase 1. Multi-tenancy support (row-based setup with per-domain or per-tenant-ID registration selection) is a Phase 2 item.
 
 ## Acknowledgements
 

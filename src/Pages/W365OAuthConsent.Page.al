@@ -2,7 +2,7 @@ namespace Wingate365.GuestEmailAPI;
 
 page 50108 "W365 OAuth Consent"
 {
-    Caption = 'Connect Guest Email';
+    Caption = 'Connect Current User Email API';
     PageType = Card;
     UsageCategory = Tasks;
     ApplicationArea = All;

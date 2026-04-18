@@ -65,7 +65,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
     procedure SendEmail(ToAddress: Text; Subject: Text; BodyHtml: Text): Boolean
     var
         AccessToken: Text;
-        NoTokenErr: Label 'You do not have an active Graph email authorisation. Open the W365 OAuth Consent page to connect your email account first.';
+        NoTokenErr: Label 'You do not have an active email authorisation. Open the Connect Current User Email API page to connect your email account first.';
     begin
         if not OAuthMgt.GetAccessToken(AccessToken) then
             Error(NoTokenErr);
@@ -79,7 +79,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
     procedure SendEmail(ToAddress: Text; Subject: Text; BodyHtml: Text; BodyText: Text): Boolean
     var
         AccessToken: Text;
-        NoTokenErr: Label 'You do not have an active Graph email authorisation. Open the W365 OAuth Consent page to connect your email account first.';
+        NoTokenErr: Label 'You do not have an active email authorisation. Open the Connect Current User Email API page to connect your email account first.';
     begin
         if not OAuthMgt.GetAccessToken(AccessToken) then
             Error(NoTokenErr);
@@ -148,7 +148,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
         // 401 - token rejected; clear cached token so next attempt re-prompts
         if StatusCode = 401 then begin
             OAuthMgt.ClearTokens();
-            Error('Microsoft Graph rejected the authorisation token (401). Please re-authorise on the W365 OAuth Consent page.');
+            Error('Microsoft Graph rejected the authorisation token (401). Please re-authorise on the Connect Current User Email API page.');
         end;
 
         // 429 - throttled; surface gracefully without retrying in a tight loop

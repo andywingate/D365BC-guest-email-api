@@ -68,7 +68,7 @@ Before running any paths, confirm:
 
 1. Search BC for **Email Accounts** and click **New**
 2. Select **Guest Email (Microsoft Graph)** from the account type list and click **Next**
-3. The **Connect Guest Email** page opens - click **Connect my Email**
+3. The **Connect Current User Email API** page opens - click **Connect my Email**
 4. Sign in with your home-tenancy account in the popup and click **Accept**
 5. Click **Next** then **Finish** in the wizard
 

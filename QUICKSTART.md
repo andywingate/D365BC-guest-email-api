@@ -112,14 +112,14 @@ That is all the admin configuration required. You do not need to create one acco
 
 > **This step must be completed by each user themselves.** Each user signs in to BC with their own account and completes the steps below. It cannot be done by an admin on their behalf - the consent grants a token tied to the individual's identity.
 
-There are two entry points for the consent flow - both open the same **Connect Guest Email** page:
+There are two entry points for the consent flow - both open the same **Connect Current User Email API** page:
 
 ### Option A - via Email Accounts (recommended)
 
 1. Search BC for **Email Accounts** and open the page
 2. Click **New** to open the **Set Up Email Account** wizard
 3. Select **Guest Email (Microsoft Graph)** from the account type list and click **Next**
-4. The **Connect Guest Email** page opens - click **Connect my Email**
+4. The **Connect Current User Email API** page opens - click **Connect my Email**
 5. A sign-in popup opens - sign in with your **home-tenancy work account** (e.g. `user@theircompany.com`) and click **Accept**
 6. The popup closes and the page shows **Connected**
 7. Click **Next** then **Finish** in the wizard
@@ -127,7 +127,7 @@ There are two entry points for the consent flow - both open the same **Connect G
 ### Option B - direct consent page
 
 1. Search BC for **W365 User Token Status** (or use the **User Tokens** action from the W365 Email Setup Card)
-2. Click **Authorise (Consent Flow)** to open the **Connect Guest Email** page
+2. Click **Authorise (Consent Flow)** to open the **Connect Current User Email API** page
 3. Click **Connect my Email**
 4. A sign-in popup opens - sign in with your home-tenancy account and click **Accept**
 5. The popup closes and the page shows **Connected**
@@ -144,9 +144,9 @@ Tokens are refreshed automatically before they expire. Users should not need to 
 2. Select the **Current User Email API** row and click **Send Test Email** from the action bar
 3. BC sends a test message using the connector - the recipient receives an email **from your home-tenancy address**
 
-### Option B - via the Connect Guest Email page
+### Option B - via the Connect Current User Email API page
 
-1. Open the **Connect Guest Email** page (search **W365 User Token Status** > **Authorise**)
+1. Open the **Connect Current User Email API** page (search **W365 User Token Status** > **Authorise**)
 2. Scroll to **Test Email** and enter a recipient address
 3. Click **Send Test Email**
 4. The recipient should receive an email **from your home-tenancy address** (e.g. `user@theircompany.com`) - not from the BC host tenant
