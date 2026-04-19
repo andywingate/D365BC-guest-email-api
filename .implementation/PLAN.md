@@ -29,12 +29,15 @@ The same problem applies to any user (guest or member) in a BC environment hoste
 |---|---|---|
 | Account model | Single fixed-GUID account (`Current User Email API`) | BC's `Email Scenario` table maps a scenario to one `Account Id`. A single account set as default means scenarios are configured once and every send resolves to the correct user's token at runtime via `UserSecurityId()`. Same pattern as BC's built-in Current User connector. |
 | OAuth flow | Authorization Code + PKCE (plain method) | Best practice for delegated flows. Plain method avoids SHA-256 byte manipulation in AL. |
-| Token storage | `IsolatedStorage` with `DataScope::User` | Per-user, private. Phase 1 stores access and refresh tokens via plain `Set()`. Phase 3 will fix: only persist the refresh token, use `SetEncrypted()` for client secret (under 215-char limit), use `SecretText` parameters throughout, and stop persisting short-lived access tokens. |
-| Client secret storage | `IsolatedStorage` with `DataScope::Company` | Never in a table field. Admin sets it via a masked field; value is never read back to the UI. Phase 3 will switch to `SetEncrypted()`. |
+| Token storage (Phase 1) | `IsolatedStorage` with `DataScope::User` | Per-user, private. Phase 1 stores access and refresh tokens via plain `Set()`. Phase 3 replaces this entirely - see below. |
+| Token storage (Phase 3) | In-memory only - no persistent token storage | Access and refresh tokens live in memory for the duration of the RestClient instance. When the session ends or the user logs out, tokens are gone and the user re-authenticates. This eliminates the IsolatedStorage attack vector for tokens entirely. With SSO via the built-in OAuth2 module, re-authentication should be seamless. Based on AJ Kauffmann's RestClientOAuth architecture. |
+| Client secret storage | `IsolatedStorage` with `DataScope::Company`, `SetEncrypted()` | Never in a table field. Admin sets it via a masked field; value is never read back to the UI. Phase 1 uses plain `Set()`. Phase 3 switches to `SetEncrypted()` (client secret is under the 215-char limit). |
 | Guest detection | `#EXT#` in `User."Authentication Email"` | Entra ID always injects `#EXT#` into the UPN of every B2B guest. Available without additional Graph permissions. Not used for routing (single-account model handles all users) but available for informational use. |
-| HTTP client | Native AL `HttpClient` | No external dependencies. Phase 3 will migrate to System Application `Rest Client` module to reduce boilerplate. |
-| Redirect URI | `https://businesscentral.dynamics.com/OAuthLanding.htm` | BC's standard OAuth landing page. The popup control add-in opens the consent URL and detects the redirect automatically. Phase 3 will evaluate replacing with System Application `OAuth2` module. |
-| RestClientOAuth library | Not adopted as a dependency | Arend-Jan Kauffmann's library follows the same Auth Code + PKCE pattern and is MIT licensed, but is in-memory only. This app requires persistent tokens since the consent session and the send context are separate. Architecture patterns were informed by that work. Phase 3 will evaluate incorporating code or adopting the System Application OAuth2 module. |
+| HTTP client (Phase 1) | Native AL `HttpClient` | No external dependencies. Replaced in Phase 3. |
+| HTTP client (Phase 3) | System Application `Rest Client` module | Handles headers, content types, error responses, retry logic. Eliminates ~100 lines of HTTP boilerplate. Also serves as the in-memory token holder - the RestClient instance holds the access token for its lifetime, refreshing automatically. |
+| Redirect URI (Phase 1) | `https://businesscentral.dynamics.com/OAuthLanding.htm` | BC's standard OAuth landing page. Phase 1 uses a custom popup control add-in to open the consent URL and detect the redirect. Replaced in Phase 3. |
+| OAuth flow (Phase 3) | System Application `OAuth2` codeunit (501) | Built-in OAuth redirect implementation. Handles the popup, PKCE, and code exchange natively. Eliminates the custom control add-in, JavaScript file, and manual PKCE code entirely. Per AJ Kauffmann's recommendation. |
+| RestClientOAuth library | Architecture model for Phase 3 | Arend-Jan Kauffmann's library (MIT licensed) keeps tokens in memory only - no persistent storage. Phase 3 adopts this approach: tokens live in memory for the session, and re-authentication via SSO is seamless. The advanced OAuth app in the same repo demonstrates a self-hosted SSO landing page for true single sign-on. |
 
 ---
 
@@ -70,16 +73,16 @@ The app registration lives in the **host tenant**. It uses delegated permissions
 | ID | Object | Type | Purpose |
 |---|---|---|---|
 | 50100 | `W365 Email Setup` | Table | App registration details - App ID, Tenant ID, Redirect URI |
-| 50101 | `W365 User Email Token` | Table | Per-user consent status, token expiry, home email address |
+| 50101 | `W365 User Email Token` | Table | Per-user home email address (Phase 3: consent status and token expiry fields removed) |
 | 50103 | `W365 Email Setup Card` | Page | Admin setup card |
-| 50104 | `W365 User Token List` | Page | Admin list - all users, token status, consent and clear actions |
+| 50104 | `W365 User Token List` | Page | Admin list - all users and connection status |
 | 50105 | `W365 Graph Mail Mgt` | Codeunit | `POST /v1.0/me/sendMail` and `GET /me` Graph calls |
-| 50106 | `W365 OAuth Mgt` | Codeunit | Auth URL builder, code exchange, token refresh |
-| 50108 | `W365 OAuth Consent` | Page | User consent flow - opens PKCE popup, stores token on return |
+| 50106 | `W365 OAuth Mgt` | Codeunit | Auth URL builder, code exchange, token refresh (Phase 3: major rewrite to use OAuth2 module) |
+| 50108 | `W365 OAuth Consent` | Page | User consent flow (Phase 3: **deleted** - auth handled inline at send time) |
 | 50109 | `W365 Guest Email` | PermissionSet | Access to all W365 objects |
 | 50110 | `W365 Guest Email Connector` | Codeunit | `Email Connector`, `Email Connector v4`, `Default Email Rate Limit` implementations |
 | 50100 | `W365 Guest Email Connector` | Enum Extension | Extends `Email Connector` enum |
-| 50100 | `W365 OAuth Popup` | ControlAddin | Popup window for PKCE consent flow |
+| 50100 | `W365 OAuth Popup` | ControlAddin | Popup window for PKCE consent flow (Phase 3: **deleted** - replaced by OAuth2 module) |
 
 ---
 
@@ -93,48 +96,94 @@ The Email Scenarios problem was solved by the single fixed-account model. A sing
 
 Phase 3 covers two workstreams: feedback changes from code review, and multi-home-tenancy support.
 
-### 3a - Feedback Changes (Code Review)
+### 3a - Architecture Overhaul (Code Review)
 
-Based on review by Arend-Jan Kauffmann. All items are valid and accepted.
+Based on review and follow-up guidance from Arend-Jan Kauffmann. This is a significant architecture change - the token model moves from persistent storage to in-memory only, and the separate consent page is eliminated entirely.
 
-#### Security Hardening
+#### Zero-Touch User Experience
 
-**SecretText and NonDebuggable** - `W365 OAuth Mgt` currently passes access tokens, refresh tokens, and client secret as plain `Text` parameters. All token/secret-handling procedures should use `SecretText` and be marked `[NonDebuggable]` to prevent debugger exposure. Both are available on BC27 (runtime 16.0).
+The Phase 1 approach requires users to visit a separate "Connect Current User Email API" consent page before they can send email. Phase 3 removes that step entirely:
+
+1. Admin configures the Entra app registration in W365 Email Setup and enables the connector as default
+2. Users just use BC normally - compose emails, send statements, print reports
+3. At first send, the OAuth2 module triggers SSO or consent inline - the user signs in, approves, and the email sends in one flow
+4. Subsequent sends in the same session use the in-memory token - no prompt
+5. New sessions - SSO kicks in silently, no popup, no user action
+
+No consent page, no "connect my email" button, no extra step. Users never need to know the connector exists.
+
+#### In-Memory Token Model (No Persistent Token Storage)
+
+The Phase 1 approach stores access tokens, refresh tokens, and expiry timestamps in IsolatedStorage. AJ's feedback: **don't store tokens at all.**
+
+His RestClientOAuth library keeps tokens in memory for the lifetime of the RestClient instance. When the instance is destroyed or the user logs out, tokens are gone and the user must re-authenticate. This eliminates the IsolatedStorage attack vector entirely - there is nothing for a malicious PTE with a cloned app GUID to steal.
+
+Key points from AJ:
+- Every time you acquire an access token, you also get a new refresh token that replaces the previous one with a new expiry date (refresh token cycling)
+- The RestClient instance holds both tokens in memory and refreshes automatically in the background
+- When the session ends, tokens are gone - the user re-authenticates
+- With the built-in OAuth2 module's SSO support, re-authentication should be seamless (no popup, no user action)
+
+Implementation:
+
+1. Remove all IsolatedStorage keys for tokens: `W365_AT`, `W365_RT`, `W365_EXP`, `W365_CV`, `W365_STATE`
+2. Only `W365_CS` (client secret, `DataScope::Company`) remains in IsolatedStorage, switched to `SetEncrypted()`
+3. Token acquisition and refresh handled by RestClient + OAuth2 module at send time
+4. If the user has no valid session, the OAuth2 module triggers SSO or prompts for consent inline
+5. The `W365 User Email Token` table stores the user's home email address (for display in Email Accounts) after first successful auth - populated from `GET /me` at first send. No token expiry tracking.
+
+Files affected: `W365OAuthMgt.Codeunit.al` (major rewrite), `W365GraphMailMgt.Codeunit.al`, `W365GuestEmailConnector.Codeunit.al`
+
+#### Send Path - No Silent Failures
+
+**Emails must never silently fail due to an expired or missing token.**
+
+- **Interactive context** (compose dialog, manual send, print-and-email): the OAuth2 module triggers SSO or consent inline before sending. The user sees a sign-in prompt if needed, completes it, and the email sends. No error, no lost email.
+- **Background context** (scheduled reports, job queue, ISV sends): if no valid in-memory token exists and the context is non-interactive, the email must be queued in BC's outbox with a clear status message ("Re-authentication required") rather than failing silently. The user picks it up on their next interactive session.
+
+#### GetAccounts Display Email
+
+The Email Accounts page needs to show a "From" address before the user has ever authenticated via Graph. Phase 3 approach:
+
+- Before first send: show the user's BC `Authentication Email` from the `User` table as the display address
+- After first successful send: call `GET /me` to retrieve the real Graph home email address, store it in `W365 User Email Token`, and use that going forward
+- This handles the chicken-and-egg problem without requiring a separate consent step
+
+With SSO via the built-in OAuth2 module, re-authentication should be seamless in most cases. If SSO is not viable for cross-tenant guest users, investigate AJ's advanced OAuth app pattern (self-hosted SSO landing page) as a fallback.
+
+#### SecretText and NonDebuggable
+
+All token and secret parameters must use `SecretText` and be marked `[NonDebuggable]`. Both are available on BC27 (runtime 16.0). With the in-memory model, this primarily affects the RestClient token handling and the client secret storage path.
 
 Files affected: `W365OAuthMgt.Codeunit.al`, `W365GraphMailMgt.Codeunit.al`
 
-**IsolatedStorage encryption** - The code uses `IsolatedStorage.Set()` (plain text, not encrypted). `SetEncrypted()` is limited to 215 characters, which rules it out for access tokens (~1200-2000 chars from Entra) and refresh tokens. Client secret is typically under 215 chars and should use `SetEncrypted()`. Fix the misleading code comments that claim `IsolatedStorage.Set()` encrypts at rest - it does not.
+#### Client Secret Encryption
 
-Files affected: `W365OAuthMgt.Codeunit.al`
-
-**IsolatedStorage cross-app risk** - IsolatedStorage is scoped by app ID. A second PTE published with the same app GUID could read these values and steal tokens. Investigate whether this is reproducible on current BC versions. If confirmed, document as a known PTE deployment risk and consider mitigations (e.g. prefixed keys, runtime caller validation).
-
-#### Token Storage Simplification
-
-**Stop persisting access tokens** - Only the refresh token needs persistent storage. The access token is valid for ~60 minutes and should not be stored. The code verifier and state are already cleaned up after exchange (correct). Remove `W365_AT` and `W365_EXP` keys from IsolatedStorage. Acquire a fresh access token from the refresh token on each send operation. The access token should live only as a `SecretText` variable for the duration of a single operation.
+Switch `W365_CS` from `IsolatedStorage.Set()` to `SetEncrypted()`. Client secret is under the 215-character limit. Fix the misleading code comments that claim `Set()` encrypts at rest - it does not.
 
 Files affected: `W365OAuthMgt.Codeunit.al`
 
 #### Replace HttpClient with RestClient
 
-The System Application `Rest Client` module (available BC21+) handles headers, content types, error responses, and retry logic. The current `W365 Graph Mail Mgt` has ~100 lines of HTTP boilerplate that RestClient eliminates. Adopt RestClient for all Graph API calls.
+The System Application `Rest Client` module (available BC21+) handles headers, content types, error responses, and retry logic. The current `W365 Graph Mail Mgt` has ~100 lines of HTTP boilerplate that RestClient eliminates. The RestClient instance also serves as the in-memory token holder.
 
 Files affected: `W365GraphMailMgt.Codeunit.al`
 
 #### Replace Custom Control Add-in with System Application OAuth2
 
-The current implementation uses a custom control add-in (`W365 OAuth Popup`) with a JavaScript file to open a popup, monitor for the redirect URL, and pass the auth code back to AL. The AL side then manually builds the PKCE challenge, exchanges the code for tokens, and stores them.
+The built-in OAuth2 library has a built-in OAuth redirect implementation that eliminates the custom control add-in entirely. Per AJ's direct guidance: "look into the OAuth library at the built-in OAuth redirect implementation."
 
-BC's System Application provides the `OAuth2` codeunit (501) with procedures like `AcquireAuthorizationCodeWithCacheByTokenCache` that handle the entire OAuth popup, PKCE, and code exchange flow natively in the BC web client. Adopting this would eliminate:
+This removes:
 
-- `W365 OAuth Popup` control add-in and its JavaScript file
+- `W365 OAuth Popup` control add-in definition (deleted)
+- `W365OAuthPopup.js` JavaScript file (deleted)
+- `W365 OAuth Consent` page (deleted - no separate consent step needed)
 - Manual PKCE verifier generation in `W365 OAuth Mgt`
 - Manual code exchange HTTP call in `W365 OAuth Mgt`
-- The `W365 OAuth Consent` page popup wiring
 
-Investigate whether the System Application OAuth2 module supports the specific requirements (delegated `Mail.Send`, multi-tenant app registration, guest user consent). If it does, this is a significant simplification. If not (e.g. due to token cache ownership or scope limitations), incorporate patterns from AJ's RestClientOAuth library (MIT licensed) to simplify the manual flow while keeping `SecretText` and `[NonDebuggable]`.
+Auth is triggered from the connector's `Send()` path via the OAuth2 codeunit. The OAuth2 module handles the popup, PKCE, code exchange, and redirect natively. Users experience it as a sign-in prompt at first send time.
 
-Files affected: `W365OAuthMgt.Codeunit.al`, `W365OAuthConsent.Page.al`, `W365OAuthPopup.ControlAddin.al`, `W365OAuthPopup.js`
+Files affected: `W365OAuthMgt.Codeunit.al` (major rewrite), `W365OAuthConsent.Page.al` (deleted), `W365OAuthPopup.ControlAddin.al` (deleted), `W365OAuthPopup.js` (deleted)
 
 ### 3b - Multi-Home-Tenancy Support
 
@@ -174,14 +223,14 @@ Files affected: `W365GraphMailMgt.Codeunit.al`, `W365GuestEmailConnector.Codeuni
 ## Security
 
 - Tokens never appear in error messages, captions, or telemetry dimensions
-- Client secret stored in `IsolatedStorage` only - never read back to the UI after saving
-- Client secret should use `SetEncrypted()` (under 215-char limit); access/refresh tokens exceed this limit and cannot use `SetEncrypted()`
-- All token-handling procedures should use `SecretText` parameters and `[NonDebuggable]` attribute
-- Redirect URI validated against the stored value on every callback - mismatch is rejected
-- OAuth scope locked to `Mail.Send` only
-- Token refresh is automatic and transparent to the user
-- Consent is strictly per-user - tokens are `DataScope::User` and cannot be accessed by other users or background tasks running as a different identity
-- IsolatedStorage cross-app risk: a PTE with the same app GUID could theoretically read stored values - to be investigated and mitigated
+- **Tokens are never persisted** (Phase 3) - access and refresh tokens live in memory only for the duration of the RestClient instance. This eliminates the IsolatedStorage cross-app attack vector entirely.
+- Client secret stored in `IsolatedStorage` with `SetEncrypted()` (Phase 3) - never in a table field, never read back to the UI after saving
+- All token-handling procedures use `SecretText` parameters and `[NonDebuggable]` attribute
+- OAuth flow handled by the System Application `OAuth2` module - no custom JavaScript or control add-in
+- OAuth scope locked to `Mail.Send` only (plus `Mail.ReadWrite` for attachment upload sessions in Phase 3c)
+- Token refresh is automatic via the RestClient instance - every refresh returns a new refresh token with a new expiry (refresh token cycling)
+- Consent is strictly per-user - the OAuth2 module scopes tokens to the authenticated user
+- Re-authentication on session expiry is expected to be seamless via SSO
 
 ---
 
