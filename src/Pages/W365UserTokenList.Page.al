@@ -2,7 +2,7 @@ namespace Wingate365.GuestEmailAPI;
 
 page 50104 "W365 User Token List"
 {
-    Caption = 'W365 User Token Status';
+    Caption = 'User Email Cache';
     PageType = List;
     SourceTable = "W365 User Email Token";
     UsageCategory = Administration;
@@ -15,28 +15,17 @@ page 50104 "W365 User Token List"
     {
         area(content)
         {
-            repeater(TokenList)
+            repeater(UserList)
             {
                 field("User Name"; Rec."User Name")
                 {
                     ApplicationArea = All;
                     ToolTip = 'The BC user name.';
                 }
-                field("Consent Status"; Rec."Consent Status")
+                field("Home Email"; Rec."Home Email")
                 {
                     ApplicationArea = All;
-                    ToolTip = 'Current token status for this user.';
-                    StyleExpr = StatusStyle;
-                }
-                field("Token Expiry"; Rec."Token Expiry")
-                {
-                    ApplicationArea = All;
-                    ToolTip = 'When the current access token expires. The app refreshes automatically before expiry.';
-                }
-                field("Last Error"; Rec."Last Error")
-                {
-                    ApplicationArea = All;
-                    ToolTip = 'Last error recorded during token acquisition or refresh.';
+                    ToolTip = 'The user''s home email address cached from Microsoft Graph after their first authentication.';
                 }
             }
         }
@@ -51,32 +40,20 @@ page 50104 "W365 User Token List"
     {
         area(processing)
         {
-            action(StartConsent)
+            action(ClearHomeEmail)
             {
                 ApplicationArea = All;
-                Caption = 'Authorise (Consent Flow)';
-                Image = Setup;
-                ToolTip = 'Open the OAuth consent page for the current user to grant Mail.Send access.';
-
-                trigger OnAction()
-                begin
-                    Page.Run(Page::"W365 OAuth Consent");
-                end;
-            }
-            action(ClearToken)
-            {
-                ApplicationArea = All;
-                Caption = 'Clear Token';
+                Caption = 'Clear Home Email';
                 Image = Delete;
-                ToolTip = 'Clears the stored token for the current user. They will need to re-authorise before sending email.';
+                ToolTip = 'Clears the cached home email for the selected user. It will be refreshed automatically on the next successful authentication.';
 
                 trigger OnAction()
                 var
-                    OAuthMgt: Codeunit "W365 OAuth Mgt";
-                    ConfirmMsg: Label 'Clear the stored token for the current user? They will need to re-authorise before sending email.';
+                    ConfirmMsg: Label 'Clear the cached home email for this user? It will be refreshed on next authentication.';
                 begin
                     if Confirm(ConfirmMsg) then begin
-                        OAuthMgt.ClearTokens();
+                        Rec."Home Email" := '';
+                        Rec.Modify();
                         CurrPage.Update(false);
                     end;
                 end;
@@ -84,38 +61,18 @@ page 50104 "W365 User Token List"
         }
         area(navigation)
         {
-            action(EmailSetup)
+            action(AppRegistrations)
             {
                 ApplicationArea = All;
-                Caption = 'Email Setup';
+                Caption = 'App Registrations';
                 Image = Setup;
-                RunObject = Page "W365 Email Setup Card";
-                ToolTip = 'Open the W365 Email Setup card to configure the Entra app registration.';
+                RunObject = Page "W365 App Registrations";
+                ToolTip = 'Open the App Registrations page to configure or review Entra app registrations.';
             }
         }
         area(Promoted)
         {
-            actionref(StartConsentRef; StartConsent) { }
+            actionref(AppRegistrationsRef; AppRegistrations) { }
         }
     }
-
-    trigger OnAfterGetRecord()
-    begin
-        SetStatusStyle();
-    end;
-
-    var
-        StatusStyle: Text;
-
-    local procedure SetStatusStyle()
-    begin
-        case Rec."Consent Status" of
-            "W365 Consent Status"::Active:
-                StatusStyle := 'Favorable';
-            "W365 Consent Status"::Error:
-                StatusStyle := 'Unfavorable';
-            else
-                StatusStyle := 'Subordinate';
-        end;
-    end;
 }

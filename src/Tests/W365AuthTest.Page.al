@@ -7,7 +7,8 @@ using System.Security.Authentication;
 /// an interactive consent prompt from within connector-style AL code.
 ///
 /// HOW TO TEST:
-/// 1. Deploy to a BC sandbox with W365 Email Setup configured (App ID, Client Secret).
+/// 1. Deploy to a BC sandbox with at least one App Registration configured
+///    (App ID set, client secret stored via the App Registration Card).
 /// 2. Open this page via the search bar: "W365 Auth Test".
 /// 3. Run "Test: Interactive Auth" - a sign-in popup should appear.
 ///    Success = popup appears, you sign in, and the status updates to confirmed.
@@ -65,33 +66,31 @@ page 50111 "W365 Auth Test"
                 trigger OnAction()
                 var
                     OAuth20: Codeunit OAuth2;
-                    Setup: Record "W365 Email Setup";
+                    OAuthMgt: Codeunit "W365 OAuth Mgt";
+                    AppReg: Record "W365 App Registration";
                     ClientSecret: SecretText;
                     AccessToken: SecretText;
-                    ClientSecretText: Text;
                     AuthCodeErr: Text;
                     Scopes: List of [Text];
-                    AuthorityUrl: Label 'https://login.microsoftonline.com/common/oauth2/v2.0', Locked = true;
                     RedirectUrl: Label 'https://businesscentral.dynamics.com/OAuthLanding.htm', Locked = true;
-                    NoSetupErr: Label 'W365 Email Setup not found. Configure App ID and client secret first.';
-                    NoSecretErr: Label 'Client secret not configured. Use the Set Client Secret action on W365 Email Setup Card.';
+                    NoAppRegErr: Label 'No App Registration found. Configure one on the App Registrations page first.';
+                    NoSecretErr: Label 'Client secret not configured for this App Registration.';
                 begin
-                    if not Setup.Get('') then
-                        Error(NoSetupErr);
+                    if not OAuthMgt.GetAppRegistrationForCurrentUser(AppReg) then
+                        Error(NoAppRegErr);
 
-                    if not IsolatedStorage.Get('W365_CS', DataScope::Company, ClientSecretText) then
+                    if not OAuthMgt.GetClientSecret(AppReg."App ID", ClientSecret) then
                         Error(NoSecretErr);
 
-                    ClientSecret := ClientSecretText;
                     Scopes.Add('https://graph.microsoft.com/Mail.Send');
 
                     StatusText := 'Calling OAuth2.AcquireTokenByAuthorizationCode with Prompt Interaction Consent...';
                     CurrPage.Update(false);
 
                     if OAuth20.AcquireTokenByAuthorizationCode(
-                        Setup."App ID",
+                        Format(AppReg."App ID"),
                         ClientSecret,
-                        AuthorityUrl,
+                        AppReg.GetAuthorityUrl(),
                         RedirectUrl,
                         Scopes,
                         "Prompt Interaction"::Consent,

@@ -1,37 +1,50 @@
 namespace Wingate365.GuestEmailAPI;
 
-page 50103 "W365 Email Setup Card"
+page 50113 "W365 App Registration Card"
 {
-    Caption = 'W365 Email Setup';
+    Caption = 'App Registration';
     PageType = Card;
-    SourceTable = "W365 Email Setup";
+    SourceTable = "W365 App Registration";
     UsageCategory = Administration;
     ApplicationArea = All;
-    InsertAllowed = false;
-    DeleteAllowed = false;
 
     layout
     {
         area(content)
         {
-            group(AppRegistration)
+            group(RegistrationDetails)
             {
-                Caption = 'Entra App Registration';
+                Caption = 'Registration Details';
 
+                field("Code"; Rec."Code")
+                {
+                    ApplicationArea = All;
+                    ToolTip = 'Short code identifying this app registration (e.g. CONTOSO).';
+                }
+                field("Description"; Rec."Description")
+                {
+                    ApplicationArea = All;
+                    ToolTip = 'Friendly description for this registration.';
+                }
                 field("App ID"; Rec."App ID")
                 {
                     ApplicationArea = All;
-                    ToolTip = 'The Application (Client) ID of the Azure App Registration in your host tenant.';
+                    ToolTip = 'The Application (Client) ID from the Entra app registration in Azure.';
                 }
                 field("Tenant ID"; Rec."Tenant ID")
                 {
                     ApplicationArea = All;
-                    ToolTip = 'The Directory (Tenant) ID of your host Azure AD tenant.';
+                    ToolTip = 'The Tenant ID. Leave blank or use ''common'' for multi-tenant. Enter the tenant GUID for single-tenant.';
                 }
-                field("Redirect URI"; Rec."Redirect URI")
+                field("Domain Filter"; Rec."Domain Filter")
                 {
                     ApplicationArea = All;
-                    ToolTip = 'The redirect URI registered on the Entra app. Recommended: https://businesscentral.dynamics.com/OAuthLanding.htm';
+                    ToolTip = 'Optional. Restricts this registration to users from a specific home domain (e.g. contoso.com). Leave blank to use as the default fallback.';
+                }
+                field("Is Default"; Rec."Is Default")
+                {
+                    ApplicationArea = All;
+                    ToolTip = 'Mark this registration as the default fallback when no domain filter matches.';
                 }
             }
             group(ClientSecretGroup)
@@ -55,10 +68,15 @@ page 50103 "W365 Email Setup Card"
                     trigger OnValidate()
                     var
                         OAuthMgt: Codeunit "W365 OAuth Mgt";
+                        ClientSecretSecret: SecretText;
                         SecretSavedMsg: Label 'Client secret saved.';
+                        NoAppIdErr: Label 'Enter an App (Client) ID before setting the client secret.';
                     begin
                         if ClientSecretText <> '' then begin
-                            OAuthMgt.SetClientSecret(ClientSecretText);
+                            if IsNullGuid(Rec."App ID") then
+                                Error(NoAppIdErr);
+                            ClientSecretSecret := ClientSecretText;
+                            OAuthMgt.SetClientSecret(Rec."App ID", ClientSecretSecret);
                             ClientSecretText := '';
                             Message(SecretSavedMsg);
                         end;
@@ -77,36 +95,35 @@ page 50103 "W365 Email Setup Card"
                 ApplicationArea = All;
                 Caption = 'Clear Client Secret';
                 Image = Delete;
-                ToolTip = 'Removes the stored client secret. You will need to set a new one before the consent flow can run.';
+                ToolTip = 'Removes the stored client secret. You will need to set a new one before users can authenticate.';
 
                 trigger OnAction()
                 var
-                    ConfirmMsg: Label 'Are you sure you want to clear the stored client secret?';
+                    OAuthMgt: Codeunit "W365 OAuth Mgt";
+                    ConfirmMsg: Label 'Are you sure you want to clear the stored client secret for this registration?';
                 begin
                     if Confirm(ConfirmMsg) then
-                        IsolatedStorage.Delete('W365_CS', DataScope::Company);
+                        OAuthMgt.ClearClientSecret(Rec."App ID");
                 end;
             }
-            action(UserTokens)
+        }
+        area(navigation)
+        {
+            action(AllRegistrations)
             {
                 ApplicationArea = All;
-                Caption = 'User Tokens';
-                Image = Users;
-                RunObject = Page "W365 User Token List";
-                ToolTip = 'View the OAuth token status for all users and trigger the consent flow.';
+                Caption = 'All Registrations';
+                Image = List;
+                RunObject = Page "W365 App Registrations";
+                ToolTip = 'View all configured app registrations.';
             }
         }
         area(Promoted)
         {
-            actionref(UserTokensRef; UserTokens) { }
+            actionref(ClearSecretRef; ClearClientSecret) { }
+            actionref(AllRegistrationsRef; AllRegistrations) { }
         }
     }
-
-    trigger OnOpenPage()
-    begin
-        Rec.GetOrInit();
-        if not Rec.Insert() then;
-    end;
 
     var
         ClientSecretText: Text[250];
@@ -117,7 +134,7 @@ page 50103 "W365 Email Setup Card"
         ConfiguredTxt: Label 'Configured';
         NotConfiguredTxt: Label 'Not configured';
     begin
-        if OAuthMgt.HasClientSecret() then
+        if OAuthMgt.HasClientSecret(Rec."App ID") then
             exit(ConfiguredTxt)
         else
             exit(NotConfiguredTxt);

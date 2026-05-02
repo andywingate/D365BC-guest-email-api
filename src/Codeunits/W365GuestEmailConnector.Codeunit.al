@@ -13,159 +13,130 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
 
     /// <summary>
     /// Sends an email via Microsoft Graph using the current user's delegated token.
-    /// Called by BC's Email module when sending any email assigned to this connector.
+    /// Resolves the App Registration for the current user's home domain, acquires a token
+    /// (silently via SSO first, then interactively if in an interactive session), and
+    /// calls Graph with all To/Cc/Bcc recipients and attachments.
+    /// In background sessions with no cached token, raises a user-friendly error so BC
+    /// queues the message in the Outbox.
     /// </summary>
     procedure Send(EmailMessage: Codeunit "Email Message"; AccountId: Guid)
     var
+        OAuthMgt: Codeunit "W365 OAuth Mgt";
         GraphMailMgt: Codeunit "W365 Graph Mail Mgt";
+        AppReg: Record "W365 App Registration";
+        AccessToken: SecretText;
         Recipients: List of [Text];
-        ToAddress: Text;
-        Subject: Text;
-        Body: Text;
         NoRecipientsErr: Label 'The email message has no recipients.';
+        NoTokenBackgroundErr: Label 'Email authentication is required. Sign in to Business Central interactively to renew your email authorisation, then retry.';
+        NoAppRegErr: Label 'No App Registration has been configured. Create one on the App Registrations page.';
     begin
         EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"To", Recipients);
         if Recipients.Count() = 0 then
             Error(NoRecipientsErr);
 
-        // Graph sendMail sends to all recipients; we pass the first To address.
-        // Full multi-recipient support is a Phase 2 enhancement.
-        Recipients.Get(1, ToAddress);
-        Subject := EmailMessage.GetSubject();
-        Body := EmailMessage.GetBody();
+        if not OAuthMgt.GetAppRegistrationForCurrentUser(AppReg) then
+            Error(NoAppRegErr);
 
-        GraphMailMgt.SendEmail(ToAddress, Subject, Body);
+        if not OAuthMgt.GetOrAcquireToken(AppReg, AccessToken) then begin
+            if not OAuthMgt.IsInteractiveSession() then
+                Error(NoTokenBackgroundErr);
+            Error('Could not acquire an email authorisation token. Check the App Registration configuration and try again.');
+        end;
+
+        // If first auth, fetch and cache home email for display in Email Accounts
+        StoreHomeEmailIfNeeded(AccessToken);
+
+        GraphMailMgt.SendEmail(EmailMessage, AccessToken);
     end;
 
     /// <summary>
     /// Returns one account with a fixed well-known GUID - the same pattern as BC's built-in
-    /// "Current User" connector. There is only ever one entry in Email Accounts; set it as
-    /// the system default once and every user's sends resolve to their own Graph token at
-    /// runtime via UserSecurityId(). The email address shown reflects the current user's
-    /// home address from their stored token, so each user sees their own address.
+    /// Current User connector. All users share this one logical account; the connector resolves
+    /// the actual sender credentials at send time via the current user's in-memory token.
+    /// The email address shown reflects the user's cached home email if available.
     /// </summary>
     procedure GetAccounts(var EmailAccount: Record "Email Account")
     var
         UserToken: Record "W365 User Email Token";
         UserName: Code[50];
         AccountNameLbl: Label 'Current User Email API', Locked = true;
-        NotConnectedLbl: Label '(not connected - run Email Account Setup)', Locked = true;
+        NotConnectedLbl: Label '(sign in to connect your email)', Locked = true;
     begin
         EmailAccount.Init();
         EmailAccount."Account Id" := GetFixedAccountId();
         EmailAccount.Name := AccountNameLbl;
         EmailAccount.Connector := Enum::"Email Connector"::"W365 Guest Email";
 
-        // Show the current user's home email if they have an active token;
-        // otherwise show a placeholder so the account is still visible and
-        // can be set as default before users have individually consented.
         UserName := CopyStr(UserId(), 1, MaxStrLen(UserName));
-        if UserToken.Get(UserName) and (UserToken."Consent Status" = "W365 Consent Status"::Active) then begin
-            if UserToken."Home Email" <> '' then
-                EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
-            else
-                EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
-        end else
+        if UserToken.Get(UserName) and (UserToken."Home Email" <> '') then
+            EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
+        else
             EmailAccount."Email Address" := CopyStr(NotConnectedLbl, 1, MaxStrLen(EmailAccount."Email Address"));
 
         if EmailAccount.Insert() then;
     end;
 
     /// <summary>
-    /// Fixed well-known GUID used as the single Account Id for this connector.
-    /// All users share this one logical account; the connector resolves the actual
-    /// sender credentials at send time via UserSecurityId().
-    /// </summary>
-    local procedure GetFixedAccountId(): Guid
-    var
-        AccountId: Guid;
-    begin
-        Evaluate(AccountId, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
-        exit(AccountId);
-    end;
-
-    /// <summary>
-    /// Shows the account information page for the given account.
-    /// Opens the consent page for the relevant user.
+    /// Shows account information for the given account.
+    /// Opens the App Registrations page so the admin can review or update the configuration.
     /// </summary>
     procedure ShowAccountInformation(AccountId: Guid)
     begin
-        // No account information page - the Email Accounts list row is sufficient
+        Page.Run(Page::"W365 App Registrations");
     end;
 
     /// <summary>
     /// Called when "Set Up Email Account" wizard reaches this connector.
-    /// Opens the consent page - the user connects their account there.
-    /// Returns true once the user has an active token.
+    /// Verifies at least one App Registration exists and returns the fixed account.
     /// </summary>
     procedure RegisterAccount(var EmailAccount: Record "Email Account"): Boolean
     var
-        UserToken: Record "W365 User Email Token";
-        UserName: Code[50];
-        Setup: Record "W365 Email Setup";
-        NoSetupErr: Label 'W365 Email Setup has not been configured. Ask your administrator to complete the setup first.';
+        AppReg: Record "W365 App Registration";
+        NoAppRegErr: Label 'No App Registration has been configured. Open App Registrations from the action menu and create one before adding this account.';
     begin
-        if not Setup.Get('') then
-            Error(NoSetupErr);
-
-        Page.RunModal(Page::"W365 OAuth Consent");
-
-        // Check if consent was granted during the modal
-        UserName := CopyStr(UserId(), 1, MaxStrLen(UserName));
-        if not UserToken.Get(UserName) then
-            exit(false);
-        if UserToken."Consent Status" <> "W365 Consent Status"::Active then
-            exit(false);
+        if not AppReg.FindFirst() then
+            Error(NoAppRegErr);
 
         EmailAccount."Account Id" := GetFixedAccountId();
-        if UserToken."Home Email" <> '' then
-            EmailAccount."Email Address" := CopyStr(UserToken."Home Email", 1, MaxStrLen(EmailAccount."Email Address"))
-        else
-            EmailAccount."Email Address" := CopyStr(UserToken."User Name", 1, MaxStrLen(EmailAccount."Email Address"));
         EmailAccount.Name := 'Current User Email API';
         EmailAccount.Connector := Enum::"Email Connector"::"W365 Guest Email";
         exit(true);
     end;
 
     /// <summary>
-    /// Deletes the stored token for the given account, disconnecting the user.
+    /// Deletes the account. Clears the in-memory token for the current session.
     /// </summary>
     procedure DeleteAccount(AccountId: Guid): Boolean
     var
-        OAuthMgt: Codeunit "W365 OAuth Mgt";
-        ConfirmMsg: Label 'This will disconnect the email account. The user will need to reconnect. Continue?';
+        GraphSession: Codeunit "W365 Graph Session";
+        ConfirmMsg: Label 'This will disconnect the email account for this session. The account can be reconnected on next send. Continue?';
     begin
         if not Confirm(ConfirmMsg) then
             exit(false);
-        OAuthMgt.ClearTokens();
+        GraphSession.ClearToken();
         exit(true);
     end;
 
-    /// <summary>
-    /// Returns a base64-encoded logo shown in the Email Account setup wizard.
-    /// Returning empty string uses the default connector icon.
-    /// </summary>
+    /// <summary>Returns a base64-encoded logo. Empty string uses the default connector icon.</summary>
     procedure GetLogoAsBase64(): Text
     begin
         exit('');
     end;
 
-    /// <summary>
-    /// Short description shown in the "Set Up Email Account" wizard account type list.
-    /// </summary>
+    /// <summary>Short description shown in the "Set Up Email Account" wizard.</summary>
     procedure GetDescription(): Text[250]
     begin
-        exit('Send emails from Business Central using your own work address via Microsoft Graph. One account - each user sends as themselves.');
+        exit('Send emails from Business Central using your own work address via Microsoft Graph. One account - each user authenticates once per session via SSO.');
     end;
 
     // =========================================================================
-    // "Email Connector v4" interface - read/reply (not implemented in Phase 2)
+    // "Email Connector v4" interface - read/reply (send-only connector)
     // =========================================================================
 
     /// <summary>Reply to an email. Not implemented - send-only connector.</summary>
     procedure Reply(var EmailMessage: Codeunit "Email Message"; AccountId: Guid)
     begin
-        Error('Reply is not supported by the Guest Email connector. Use Send instead.');
+        Error('Reply is not supported by this connector. Use Send instead.');
     end;
 
     /// <summary>Retrieve emails from inbox. Not implemented - send-only connector.</summary>
@@ -198,4 +169,35 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
     begin
         exit(0);
     end;
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    local procedure GetFixedAccountId(): Guid
+    var
+        AccountId: Guid;
+    begin
+        Evaluate(AccountId, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+        exit(AccountId);
+    end;
+
+    [NonDebuggable]
+    local procedure StoreHomeEmailIfNeeded(AccessToken: SecretText)
+    var
+        UserToken: Record "W365 User Email Token";
+        OAuthMgt: Codeunit "W365 OAuth Mgt";
+        GraphMailMgt: Codeunit "W365 Graph Mail Mgt";
+        UserName: Code[50];
+        HomeEmail: Text;
+    begin
+        UserName := CopyStr(UserId(), 1, MaxStrLen(UserName));
+        if UserToken.Get(UserName) and (UserToken."Home Email" <> '') then
+            exit; // Already cached
+
+        HomeEmail := GraphMailMgt.GetCurrentUserEmail(AccessToken);
+        if HomeEmail <> '' then
+            OAuthMgt.StoreHomeEmail(HomeEmail);
+    end;
 }
+
