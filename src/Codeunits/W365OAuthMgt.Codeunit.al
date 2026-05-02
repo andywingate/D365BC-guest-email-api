@@ -49,7 +49,9 @@ codeunit 50106 "W365 OAuth Mgt"
             exit(true);
 
         AppReg.SetRange("Is Default");
-        // Last resort: first registration in the table
+        // Last resort: use the first registration in the table.
+        // This applies when there is exactly one registration and neither Domain Filter nor Is Default is set.
+        // For predictable behaviour with multiple registrations, always set Is Default on one of them.
         exit(AppReg.FindFirst());
     end;
 

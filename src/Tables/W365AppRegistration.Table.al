@@ -53,7 +53,7 @@ table 50111 "W365 App Registration"
                     if OtherReg.FindSet() then
                         repeat
                             OtherReg."Is Default" := false;
-                            OtherReg.Modify();
+                            OtherReg.Modify(true);
                         until OtherReg.Next() = 0;
                 end;
             end;

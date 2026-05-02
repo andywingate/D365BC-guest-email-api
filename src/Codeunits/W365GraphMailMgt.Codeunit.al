@@ -278,25 +278,26 @@ codeunit 50105 "W365 Graph Mail Mgt"
             exit(true); // No attachments - nothing to do
 
         repeat
-            AttachName := EmailMessage.Attachments_GetName();
-            AttachContentType := EmailMessage.Attachments_GetContentType();
-            AttachBase64 := EmailMessage.Attachments_GetContentBase64();
             AttachSize := EmailMessage.Attachments_GetLength();
+            if AttachSize > 0 then begin // Skip zero-byte attachments
+                AttachName := EmailMessage.Attachments_GetName();
+                AttachContentType := EmailMessage.Attachments_GetContentType();
+                AttachBase64 := EmailMessage.Attachments_GetContentBase64();
 
-            // Decode base64 to binary in a TempBlob
-            TempBlob.CreateOutStream(AttachOutStr);
-            Base64Convert.FromBase64(AttachBase64, AttachOutStr);
-            TempBlob.CreateInStream(AttachInStr);
+                // Decode base64 to binary in a TempBlob
+                TempBlob.CreateOutStream(AttachOutStr);
+                Base64Convert.FromBase64(AttachBase64, AttachOutStr);
+                TempBlob.CreateInStream(AttachInStr);
 
-            // Create upload session for this attachment
-            UploadUrl := CreateAttachmentUploadSession(AccessToken, MessageEndpoint, MessageId, AuthHeader, AttachName, AttachContentType, AttachSize);
-            if UploadUrl = '' then
-                exit(false);
+                // Create upload session for this attachment
+                UploadUrl := CreateAttachmentUploadSession(AccessToken, MessageEndpoint, MessageId, AuthHeader, AttachName, AttachContentType, AttachSize);
+                if UploadUrl = '' then
+                    exit(false);
 
-            // Upload binary content in a single PUT (up to 60 MB per Graph spec)
-            if not PutAttachmentChunk(UploadUrl, AttachInStr, AttachSize) then
-                exit(false);
-
+                // Upload binary content in a single PUT (up to 60 MB per Graph spec)
+                if not PutAttachmentChunk(UploadUrl, AttachInStr, AttachSize) then
+                    exit(false);
+            end;
         until not EmailMessage.Attachments_Next();
 
         exit(true);
@@ -316,15 +317,21 @@ codeunit 50105 "W365 Graph Mail Mgt"
         RequestJson: Text;
         ResponseText: Text;
         JsonObj: JsonObject;
+        AttachItemObj: JsonObject;
+        WrapperObj: JsonObject;
         JsonToken: JsonToken;
         StatusCode: Integer;
         ConnectErr: Label 'Could not reach Microsoft Graph when creating attachment upload session.';
     begin
         UploadSessionEndpoint := StrSubstNo(UploadSessionEndpointTpl, MessageEndpoint, MessageId);
 
-        RequestJson := '{"AttachmentItem":{"attachmentType":"file","name":"' +
-            EscapeJsonString(AttachName) + '","size":' + Format(AttachSize) +
-            ',"contentType":"' + EscapeJsonString(AttachContentType) + '"}}';
+        // Build AttachmentItem JSON using JsonObject to avoid string injection risks
+        AttachItemObj.Add('attachmentType', 'file');
+        AttachItemObj.Add('name', AttachName);
+        AttachItemObj.Add('size', AttachSize);
+        AttachItemObj.Add('contentType', AttachContentType);
+        WrapperObj.Add('AttachmentItem', AttachItemObj);
+        WrapperObj.WriteTo(RequestJson);
 
         HttpContent.WriteFrom(RequestJson);
         HttpContent.GetHeaders(ContentHeaders);
@@ -653,20 +660,6 @@ codeunit 50105 "W365 Graph Mail Mgt"
         GraphSession: Codeunit "W365 Graph Session";
     begin
         GraphSession.ClearToken();
-    end;
-
-    // -------------------------------------------------------------------------
-    // String helpers
-    // -------------------------------------------------------------------------
-
-    local procedure EscapeJsonString(InputText: Text): Text
-    begin
-        exit(InputText
-            .Replace('\', '\\')
-            .Replace('"', '\"')
-            .Replace(#10, '\n')
-            .Replace(#13, '\r')
-            .Replace(#9, '\t'));
     end;
 }
 
