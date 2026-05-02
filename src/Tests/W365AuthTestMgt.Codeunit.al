@@ -20,34 +20,32 @@ codeunit 50112 "W365 Auth Test Mgt"
     procedure TryAcquireToken(var ResultText: Text; var AcquiredToken: Boolean)
     var
         OAuth20: Codeunit OAuth2;
-        Setup: Record "W365 Email Setup";
+        OAuthMgt: Codeunit "W365 OAuth Mgt";
+        AppReg: Record "W365 App Registration";
         ClientSecret: SecretText;
         AccessToken: SecretText;
-        ClientSecretText: Text;
         AuthCodeErr: Text;
         Scopes: List of [Text];
-        AuthorityUrl: Label 'https://login.microsoftonline.com/common/oauth2/v2.0', Locked = true;
         RedirectUrl: Label 'https://businesscentral.dynamics.com/OAuthLanding.htm', Locked = true;
-        NoSetupErr: Label 'W365 Email Setup not found.';
+        NoAppRegErr: Label 'No App Registration found.';
         NoSecretErr: Label 'Client secret not configured.';
     begin
-        if not Setup.Get('') then begin
-            ResultText := 'FAILED: ' + NoSetupErr;
+        if not OAuthMgt.GetAppRegistrationForCurrentUser(AppReg) then begin
+            ResultText := 'FAILED: ' + NoAppRegErr;
             exit;
         end;
 
-        if not IsolatedStorage.Get('W365_CS', DataScope::Company, ClientSecretText) then begin
+        if not OAuthMgt.GetClientSecret(AppReg."App ID", ClientSecret) then begin
             ResultText := 'FAILED: ' + NoSecretErr;
             exit;
         end;
 
-        ClientSecret := ClientSecretText;
         Scopes.Add('https://graph.microsoft.com/Mail.Send');
 
         if OAuth20.AcquireTokenByAuthorizationCode(
-            Setup."App ID",
+            Format(AppReg."App ID"),
             ClientSecret,
-            AuthorityUrl,
+            AppReg.GetAuthorityUrl(),
             RedirectUrl,
             Scopes,
             "Prompt Interaction"::Consent,
