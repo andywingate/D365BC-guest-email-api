@@ -92,148 +92,258 @@ The Email Scenarios problem was solved by the single fixed-account model. A sing
 
 ---
 
-## Phase 3 *(next)*
+## Phase 3 *(in progress)*
 
-Phase 3 covers two workstreams: feedback changes from code review, and multi-home-tenancy support.
+Phase 3 is split into five sprints. Each sprint is independently testable, leaves the app shippable, and can be handed to a sub-agent as a self-contained brief.
 
-### 3a - Architecture Overhaul (Code Review)
+### Architecture Decisions for Phase 3
 
-Based on review and follow-up guidance from Arend-Jan Kauffmann. This is a significant architecture change - the token model moves from persistent storage to in-memory only, and the separate consent page is eliminated entirely.
-
-#### Zero-Touch User Experience
-
-The Phase 1 approach requires users to visit a separate "Connect Current User Email API" consent page before they can send email. Phase 3 removes that step entirely:
-
-1. Admin configures the Entra app registration in W365 Email Setup and enables the connector as default
-2. Users just use BC normally - compose emails, send statements, print reports
-3. At first send, the OAuth2 module triggers SSO or consent inline - the user signs in, approves, and the email sends in one flow
-4. Subsequent sends in the same session use the in-memory token - no prompt
-5. New sessions - SSO kicks in silently, no popup, no user action
-
-No consent page, no "connect my email" button, no extra step. Users never need to know the connector exists.
-
-#### In-Memory Token Model (No Persistent Token Storage)
-
-The Phase 1 approach stores access tokens, refresh tokens, and expiry timestamps in IsolatedStorage. AJ's feedback: **don't store tokens at all.**
-
-His RestClientOAuth library keeps tokens in memory for the lifetime of the RestClient instance. When the instance is destroyed or the user logs out, tokens are gone and the user must re-authenticate. This eliminates the IsolatedStorage attack vector entirely - there is nothing for a malicious PTE with a cloned app GUID to steal.
-
-Key points from AJ:
-- Every time you acquire an access token, you also get a new refresh token that replaces the previous one with a new expiry date (refresh token cycling)
-- The RestClient instance holds both tokens in memory and refreshes automatically in the background
-- When the session ends, tokens are gone - the user re-authenticates
-- With the built-in OAuth2 module's SSO support, re-authentication should be seamless (no popup, no user action)
-
-Implementation:
-
-1. Remove all IsolatedStorage keys for tokens: `W365_AT`, `W365_RT`, `W365_EXP`, `W365_CV`, `W365_STATE`
-2. Only `W365_CS` (client secret, `DataScope::Company`) remains in IsolatedStorage, switched to `SetEncrypted()`
-3. Token acquisition and refresh handled by RestClient + OAuth2 module at send time
-4. If the user has no valid session, the OAuth2 module triggers SSO or prompts for consent inline
-5. The `W365 User Email Token` table stores the user's home email address (for display in Email Accounts) after first successful auth - populated from `GET /me` at first send. No token expiry tracking.
-
-Files affected: `W365OAuthMgt.Codeunit.al` (major rewrite), `W365GraphMailMgt.Codeunit.al`, `W365GuestEmailConnector.Codeunit.al`
-
-#### Send Path - No Silent Failures
-
-**Emails must never silently fail due to an expired or missing token.**
-
-- **Interactive context** (compose dialog, manual send, print-and-email): the OAuth2 module triggers SSO or consent inline before sending. The user sees a sign-in prompt if needed, completes it, and the email sends. No error, no lost email.
-- **Background context** (scheduled reports, job queue, ISV sends): if no valid in-memory token exists and the context is non-interactive, the email must be queued in BC's outbox with a clear status message ("Re-authentication required") rather than failing silently. The user picks it up on their next interactive session.
-
-#### GetAccounts Display Email
-
-The Email Accounts page needs to show a "From" address before the user has ever authenticated via Graph. Phase 3 approach:
-
-- Before first send: show the user's BC `Authentication Email` from the `User` table as the display address
-- After first successful send: call `GET /me` to retrieve the real Graph home email address, store it in `W365 User Email Token`, and use that going forward
-- This handles the chicken-and-egg problem without requiring a separate consent step
-
-With SSO via the built-in OAuth2 module, re-authentication should be seamless in most cases. If SSO is not viable for cross-tenant guest users, investigate AJ's advanced OAuth app pattern (self-hosted SSO landing page) as a fallback.
-
-#### SecretText and NonDebuggable
-
-All token and secret parameters must use `SecretText` and be marked `[NonDebuggable]`. Both are available on BC27 (runtime 16.0). With the in-memory model, this primarily affects the RestClient token handling and the client secret storage path.
-
-Files affected: `W365OAuthMgt.Codeunit.al`, `W365GraphMailMgt.Codeunit.al`
-
-#### Client Secret Encryption
-
-Switch `W365_CS` from `IsolatedStorage.Set()` to `SetEncrypted()`. Client secret is under the 215-character limit. Fix the misleading code comments that claim `Set()` encrypts at rest - it does not.
-
-Files affected: `W365OAuthMgt.Codeunit.al`
-
-#### Replace HttpClient with RestClient
-
-The System Application `Rest Client` module (available BC21+) handles headers, content types, error responses, and retry logic. The current `W365 Graph Mail Mgt` has ~100 lines of HTTP boilerplate that RestClient eliminates. The RestClient instance also serves as the in-memory token holder.
-
-Files affected: `W365GraphMailMgt.Codeunit.al`
-
-#### Replace Custom Control Add-in with System Application OAuth2
-
-The built-in OAuth2 library has a built-in OAuth redirect implementation that eliminates the custom control add-in entirely. Per AJ's direct guidance: "look into the OAuth library at the built-in OAuth redirect implementation."
-
-This removes:
-
-- `W365 OAuth Popup` control add-in definition (deleted)
-- `W365OAuthPopup.js` JavaScript file (deleted)
-- `W365 OAuth Consent` page (deleted - no separate consent step needed)
-- Manual PKCE verifier generation in `W365 OAuth Mgt`
-- Manual code exchange HTTP call in `W365 OAuth Mgt`
-
-Auth is triggered from the connector's `Send()` path via the OAuth2 codeunit. The OAuth2 module handles the popup, PKCE, code exchange, and redirect natively. Users experience it as a sign-in prompt at first send time.
-
-Files affected: `W365OAuthMgt.Codeunit.al` (major rewrite), `W365OAuthConsent.Page.al` (deleted), `W365OAuthPopup.ControlAddin.al` (deleted), `W365OAuthPopup.js` (deleted)
-
-### 3b - Multi-Home-Tenancy Support
-
-The current `W365 Email Setup` is a singleton - one App ID and one Host Tenant ID. This covers environments where all users authenticate against a single Entra app registration.
-
-In environments where guests come from multiple home tenancies that each require a separate app registration (e.g. due to client IT policy), Phase 3b extends the setup layer:
-
-- Change `W365 Email Setup` from singleton to row-based, keyed by home tenant domain or tenant ID
-- At token exchange time, detect the current user's home domain from their `#EXT#` UPN and look up the matching setup row
-- Admin UI updated to a list + card pattern to manage multiple registrations
-- IsolatedStorage key strategy for per-registration client secrets (keyed by App ID)
-
-### 3c - Email Attachment Support
-
-The current `Send()` implementation passes subject and body only - attachments from the `Email Message` codeunit are not forwarded to Graph. This is a critical gap for BC where almost every email send includes a file (invoices, statements, reports, delivery notes).
-
-Graph supports two attachment strategies:
-
-| Attachment Size | Method | API Pattern |
+| Decision | Choice | Rationale |
 |---|---|---|
-| Under ~3MB | Inline base64 in `sendMail` JSON | Single `POST /me/sendMail` with `attachments` array in the message body. Base64 encoding inflates by ~33%, so the practical file limit is ~3MB to stay under the 4MB JSON body limit. |
-| 3MB - 150MB | Upload session | `POST /me/messages` (create draft) then `POST /me/messages/{id}/attachments/createUploadSession` then `PUT` byte ranges in chunks, then `POST /me/messages/{id}/send`. |
+| OAuth library | `Rest Client OAuth` by AJ Kauffmann (MIT) added as a hard dependency | Provides in-memory `SecretText`-only token handling, PKCE + state, automatic refresh, built-in redirect page, multi-tenant authority. Confirmed by AJ's `SecurityConsiderations.md` and `Architecture.md`: "Access and refresh tokens are held in `SecretText` variables only", "In-memory token storage: tokens tied to object lifetime; no persistent cache". Replicating this in our app would duplicate ~20 codeunits of well-tested code. Customers install two PTEs - acceptable. |
+| Token persistence | None - in-memory only via the library's `Rest Client` instance lifetime | Removes IsolatedStorage as an attack vector for tokens entirely. Re-authentication is seamless via SSO when the same browser session is still signed in to Entra. |
+| App Registration model | Multiple registrations stored as table rows, keyed by a short Code, with optional Domain Filter for current-user routing | Lets a partner-hosted environment serve users from many home tenancies, each with its own Entra app registration. One registration can also be tagged as default/fallback. |
+| App Registration UI | Reusable `App Registrations` list + card pages, drilled into from any Email Account that uses Microsoft Graph | Same management surface for the Current User connector and the Shared Mailbox connector (and any future Graph-based connector). |
+| Setup entry point | All setup happens through the standard `Email Account` page (drill-in actions on the account card) - no separate top-level setup page | Aligns with how BC's other email connectors expose their settings. Admins manage everything from one familiar place. |
+| Connector types | Two connectors share the same OAuth + App Registration plumbing: `Current User Email API` and `Shared Mailbox Email API` | Same Graph stack, two different `/sendMail` endpoints (`/me/sendMail` vs `/users/{mailbox}/sendMail`). |
+| Caption convention | All page, table, field, action and enum captions use plain English - no `W365` prefix anywhere user-visible | The `W365` prefix is retained as the AL object name prefix and the `Wingate365` publisher name is enough branding. |
 
-Implementation:
+### Dependency Details
 
-1. Read attachments from `Email Message` codeunit using `GetAttachments()`
-2. For each attachment, check size
-3. If all attachments fit inline (total base64 < ~3MB), use the current `sendMail` path with an `attachments` array added to the JSON
-4. If any attachment exceeds ~3MB, switch to the draft + upload session pattern for that message
-5. Target: support attachments up to 30MB comfortably (well within Graph's 150MB upload session limit)
-6. Requires `Mail.ReadWrite` delegated permission in addition to `Mail.Send` for the draft/upload path - update the Entra app registration requirements and QUICKSTART accordingly
+Add to `app.json`:
 
-Files affected: `W365GraphMailMgt.Codeunit.al`, `W365GuestEmailConnector.Codeunit.al`
+```json
+"dependencies": [
+    {
+        "id": "19642efb-0a6e-4738-afc4-025f37856f4f",
+        "publisher": "AJ Kauffmann",
+        "name": "Rest Client OAuth",
+        "version": "1.0.0.0"
+    }
+]
+```
+
+Library object range: 50300 - 50349. Our object range: 50100 - 50149. No conflict.
+
+Library codeunit names used (all suffixed `KFM`): `OAuth Client Application KFM`, `Microsoft Entra ID KFM`, `Auth. Code Grant Flow KFM`, `Http Authentication OAuth2 KFM`, plus interfaces `OAuth Authority KFM` and `OAuth Authorization Flow KFM`.
+
+The library targets platform 26.0; we run on platform 27, so we satisfy the dependency. The library uses BC's System Application `Rest Client` module under the hood.
+
+---
+
+### Sprint 3.1 - Caption Cleanup and Library Dependency *(small, low risk)*
+
+Goal: prepare the codebase for the architectural rework. No behaviour change.
+
+**Tasks:**
+1. Strip `W365` from every `Caption =` value across all AL objects (pages, tables, fields, actions, enums, permission sets). Object names stay unchanged - only captions change.
+2. Add the `Rest Client OAuth` dependency to `app.json`.
+3. Copy the AJ library `.app` file into `.alpackages/` so the workspace compiles.
+4. Bump app version to `2.0.0.0` (breaking change in setup data model coming in Sprint 3.2).
+5. Verify the app still compiles, deploys, and sends an email end-to-end with the existing Phase 1 stack.
+
+**Deliverable:** Phase 1 functionality unchanged, captions clean, library available for next sprint.
+
+---
+
+### Sprint 3.2 - App Registration Data Model *(foundational)*
+
+Goal: replace the singleton `W365 Email Setup` with a multi-row `App Registration` table, with a reusable list and card page set.
+
+**New AL objects:**
+
+| ID | Object | Type | Purpose |
+|---|---|---|---|
+| 50111 | `W365 App Registration` | Table | One row per Entra app registration. Fields: Code (PK), Description, App ID (Guid), Tenant ID (Text - blank or `common` = multi-tenant), Domain Filter (Text - optional, e.g. `contoso.com`), Is Default (Boolean, only one) |
+| 50112 | `W365 App Registrations` | Page (List) | Reusable list - launched by drill-in from any Email Account that uses Graph |
+| 50113 | `W365 App Registration Card` | Page (Card) | Edit a single registration, set the client secret (masked, write-only) |
+
+**Removed AL objects:**
+
+- `W365 Email Setup` table (50100) and `W365 Email Setup Card` page (50103) - replaced by the App Registration table and pages.
+
+**IsolatedStorage key strategy:**
+
+- Per-registration client secret keyed as `W365_CS_{AppId}` (`DataScope::Company`, `SetEncrypted()`).
+- `Set Client Secret` action on the card page writes the value; the field is never read back to the UI.
+
+**Migration:** Phase 1 data is wiped on upgrade (early Phase, not yet in production). No upgrade codeunit needed.
+
+**Deliverable:** Admins can create, edit, and delete multiple App Registrations from a list page. No connector wiring changes yet.
+
+---
+
+### Sprint 3.3 - Current User Connector Rewrite Using AJ's Library *(major architectural change)*
+
+Goal: replace the manual PKCE / control add-in / IsolatedStorage token model with AJ's `Rest Client OAuth` stack.
+
+**Setup pattern at send time** (per AJ's `GettingStarted.md` step 2-5, with our extras):
+
+```al
+// 1. Detect the user's home domain from their Authentication Email
+//    e.g. user@contoso.com -> 'contoso.com'
+//    Guest user format alice_contoso.com#EXT#@hosttenant.onmicrosoft.com -> 'contoso.com'
+HomeDomain := DetectHomeDomain(UserId());
+
+// 2. Look up the App Registration for that domain (with fallback to Is Default = true)
+AppReg.SetRange("Domain Filter", HomeDomain);
+if not AppReg.FindFirst() then begin
+    AppReg.SetRange("Domain Filter");
+    AppReg.SetRange("Is Default", true);
+    AppReg.FindFirst();
+end;
+
+// 3. Build OAuth Client Application from the registration
+OAuthClientApplication.SetClientId(Format(AppReg."App ID"));
+OAuthClientApplication.SetClientSecret(GetClientSecret(AppReg."App ID"));
+OAuthClientApplication.AddScope('https://graph.microsoft.com/Mail.Send');
+
+// 4. Authority - use the registration's Tenant ID (or 'common')
+MicrosoftEntraID.SetTenantID(GetAuthorityTenant(AppReg));
+
+// 5. Auth Code Grant Flow - PromptInteraction::None for SSO-first
+AuthCodeGrantFlow.SetAuthority(MicrosoftEntraID);
+AuthCodeGrantFlow.SetPromptInteraction(Enum::"Prompt Interaction"::None);
+
+// 6. Http Authentication + Rest Client - tokens live in this instance only
+HttpAuthenticationOAuth2.Initialize(OAuthClientApplication, AuthCodeGrantFlow);
+RestClient.Initialize(HttpClientHandler, HttpAuthenticationOAuth2);
+
+// 7. Send via Graph - library handles auth header, refresh, retry
+RestClient.PostAsJson('https://graph.microsoft.com/v1.0/me/sendMail', SendMailJson);
+```
+
+**Hold the Rest Client across sends in one session:**
+
+A new `SingleInstance = true` codeunit `W365 Graph Session` (50114) holds initialized `Rest Client` instances keyed by App Registration code. First send in a session triggers SSO; subsequent sends reuse the in-memory tokens.
+
+**New AL objects:**
+
+| ID | Object | Type | Purpose |
+|---|---|---|---|
+| 50114 | `W365 Graph Session` | Codeunit (`SingleInstance = true`) | Holds initialized `Rest Client` instances per App Registration for the BC session lifetime |
+
+**Major rewrites:**
+
+- `W365 OAuth Mgt` (50106) - reduced to: domain detection, App Registration lookup, client secret retrieval. All PKCE, code exchange, token storage code deleted.
+- `W365 Graph Mail Mgt` (50105) - swap manual `HttpClient` for the library's `Rest Client`. About 100 lines of HTTP boilerplate removed.
+- `W365 Guest Email Connector` (50110) - `Send()` now triggers auth inline via `W365 Graph Session`. `RegisterAccount()` no longer opens a separate consent page (it just confirms the connector is enabled).
+
+**Deletions:**
+
+- `W365 OAuth Consent` page (50108) - no separate consent step
+- `W365 OAuth Popup` control add-in (50100) and `W365OAuthPopup.js` - replaced by library's built-in redirect page
+- `W365 Consent Status` enum (50100 EnumExt is unrelated) - no longer needed
+- All token-related fields on `W365 User Email Token` (Consent Status, Token Expiry, etc.) - keep only User Name (PK) + Home Email cache
+
+**IsolatedStorage cleanup:** delete keys `W365_AT`, `W365_RT`, `W365_EXP`, `W365_CV`, `W365_STATE` on upgrade.
+
+**Background-context safety:** in `Send()`, if `IsBackground()` and no in-memory token, return an error that BC's Email module turns into an Outbox entry with status "Re-authentication required" rather than failing silently.
+
+**Drill-in from Email Account:** add a `ShowAccountInformation` implementation that opens a small card showing the resolved App Registration for the current user plus an `App Registrations` action that opens the full list (Sprint 3.2 page).
+
+**Fallback if SSO popup is blocked from `Send()`:** the test page committed to `phase-3` (`W365 Auth Test`, page 50111) validates this before we start the rewrite. If the embedded redirect popup does not fire from `Send()` context, fall back to AJ's `RestClientOAuthAdvancedRedirectURI` library (separate dependency) which uses a control add-in for true SSO.
+
+**Deliverable:** Current User connector works end-to-end via AJ's library. Zero tokens stored in IsolatedStorage. Multi-domain routing works.
+
+---
+
+### Sprint 3.4 - Shared Mailbox Connector *(new feature)*
+
+Goal: add a second Email Connector that sends from a shared mailbox via Graph, reusing the same App Registration plumbing.
+
+**Use case:** "Sales team" shared mailbox. Anyone with delegated access (member or guest) can send from BC as the shared mailbox.
+
+**New AL objects:**
+
+| ID | Object | Type | Purpose |
+|---|---|---|---|
+| 50115 | `W365 Shared Mailbox Account` | Table | One row per configured shared mailbox. Fields: Code (PK), Display Name, Mailbox Email/UPN, App Registration Code (FK -> `W365 App Registration`), Description |
+| 50116 | `W365 Shared Mailbox Accounts` | Page (List) | Internal list of configured shared mailboxes |
+| 50117 | `W365 Shared Mailbox Card` | Page (Card) | Edit a single shared mailbox, drill-in to its App Registration |
+| 50118 | `W365 Shared Mailbox Connector` | Codeunit (Email Connector v4) | `Send()` calls `POST /v1.0/users/{mailbox}/sendMail` |
+| 50101 | `W365 Shared Mailbox Connector` | Enum Extension | Adds value to `Email Connector` enum |
+
+**Required Graph permissions** on the chosen App Registration:
+
+- `Mail.Send.Shared` (delegated) - permits sending as a shared mailbox the user has access to
+
+**`GetAccounts()`:** returns one entry per row in `W365 Shared Mailbox Account`. Each entry shows the mailbox display name and email. Multiple shared mailboxes can be set up in parallel and assigned to different Email Scenarios.
+
+**`Send()` flow:**
+
+1. Look up the row by AccountId (which equals the row's SystemId).
+2. Resolve its App Registration (Sprint 3.2 table).
+3. Acquire token via the same `W365 Graph Session` codeunit (Sprint 3.3) - the in-memory pattern is shared.
+4. POST to `https://graph.microsoft.com/v1.0/users/{mailboxEmail}/sendMail`.
+
+**Drill-in:** `ShowAccountInformation` opens the Shared Mailbox Card for that account.
+
+**Deliverable:** A second working connector that admins can register multiple instances of, each pointing at a shared mailbox.
+
+---
+
+### Sprint 3.5 - Email Attachments and Multi-Recipient *(send completeness)*
+
+Goal: forward attachments and all recipient addresses from `Email Message` to Graph. Affects both connectors (Current User and Shared Mailbox).
+
+**Attachment strategy:**
+
+| Total Size | Method | Graph Pattern |
+|---|---|---|
+| Under ~3 MB | Inline base64 in `sendMail` JSON | One POST to `/sendMail` with `attachments` array |
+| 3 MB - 150 MB | Upload session | Create draft (`POST /messages`), `createUploadSession`, PUT byte ranges, `POST /messages/{id}/send` |
+
+**Tasks:**
+
+1. Iterate `EmailMessage.GetAttachments()`, sum size, choose strategy.
+2. Inline path: extend the JSON builder with an `attachments[]` array of `fileAttachment` objects.
+3. Upload session path: implement the four-call flow with chunked PUTs (chunk size 4 MB).
+4. Pass all `To`, `Cc`, `Bcc` recipients (currently only first `To` is used).
+5. For shared mailbox: same logic but against `/users/{mailbox}/messages` instead of `/me/messages`.
+6. Update Entra App Registration setup notes - `Mail.ReadWrite` (delegated) needed in addition to `Mail.Send` for the upload session path.
+7. Target: comfortably support 30 MB attachments.
+
+**Deliverable:** All BC email scenarios (statements, invoices, reports) work with attachments through both connectors.
+
+---
+
+### Out of Scope for Phase 3
+
+- Reply, RetrieveEmails, MarkAsRead, GetEmailFolders (`Email Connector v4` interface stubs remain `not supported`)
+- AppSource publication (per-tenant only)
+- Multi-language translations
+
+---
+
+## Sub-Agent Hand-Off Brief Template
+
+For each sprint above, a sub-agent brief should include:
+
+1. **Scope** - the sprint's goal in one sentence.
+2. **Reference reading** - this `PLAN.md` Phase 3 section, the relevant existing AL files, AJ's library docs (`c:\Git\RestClientOAuth\RestClientOAuth\docs\GettingStarted.md`, `Architecture.md`, `SecurityConsiderations.md`).
+3. **AL object inventory** - new objects to create, existing objects to modify, objects to delete (all listed above).
+4. **Acceptance test** - what to manually run in a sandbox to confirm done.
+5. **Branch** - work on `phase-3`, commit with `phase-3.{sprint number}: <change>` prefix, do not merge to main until all sprints are done.
 
 ---
 
 ## Security
 
-- Tokens never appear in error messages, captions, or telemetry dimensions
-- **Tokens are never persisted** (Phase 3) - access and refresh tokens live in memory only for the duration of the RestClient instance. This eliminates the IsolatedStorage cross-app attack vector entirely.
-- Client secret stored in `IsolatedStorage` with `SetEncrypted()` (Phase 3) - never in a table field, never read back to the UI after saving
-- All token-handling procedures use `SecretText` parameters and `[NonDebuggable]` attribute
-- OAuth flow handled by the System Application `OAuth2` module - no custom JavaScript or control add-in
-- OAuth scope locked to `Mail.Send` only (plus `Mail.ReadWrite` for attachment upload sessions in Phase 3c)
-- Token refresh is automatic via the RestClient instance - every refresh returns a new refresh token with a new expiry (refresh token cycling)
-- Consent is strictly per-user - the OAuth2 module scopes tokens to the authenticated user
-- Re-authentication on session expiry is expected to be seamless via SSO
+- Tokens are never persisted - access and refresh tokens live in memory only inside AJ's library `Rest Client` instance for the BC session
+- Every refresh returns a new refresh token with a new expiry (refresh token cycling)
+- Client secrets stored in `IsolatedStorage` with `SetEncrypted()`, `DataScope::Company`, keyed per App Registration
+- Client secrets never written into a table field, never read back to the UI
+- All token and secret parameters use `SecretText` and are marked `[NonDebuggable]`
+- OAuth flow handled entirely by AJ's library - no custom JavaScript or control add-in in our code (unless the SSO test in `W365 Auth Test` shows the built-in redirect is blocked from `Send()` context, in which case we add the `RestClientOAuthAdvancedRedirectURI` dependency)
+- OAuth scopes locked to `Mail.Send` (Current User), `Mail.Send.Shared` (Shared Mailbox), plus `Mail.ReadWrite` for the attachment upload session path
+- Consent is strictly per-user - the library scopes tokens to the authenticated user
+- Re-authentication on session expiry is seamless via SSO; if not interactive, the email is queued in the BC Outbox with a clear status
 
 ---
 
 ## Parking Lot
 
 - Multi-language / translation - not in scope for per-tenant extension
+- AppSource publication - per-tenant only
+- Reply / inbox retrieval - send-only connector by design
