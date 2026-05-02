@@ -216,7 +216,6 @@ codeunit 50105 "W365 Graph Mail Mgt"
         ResponseText: Text;
         JsonObj: JsonObject;
         JsonToken: JsonToken;
-        MsgToken: JsonToken;
         ConnectErr: Label 'Could not reach Microsoft Graph when creating draft message. Check BC server outbound connectivity.';
         StatusCode: Integer;
     begin
@@ -250,13 +249,6 @@ codeunit 50105 "W365 Graph Mail Mgt"
 
         if JsonObj.Get('id', JsonToken) then
             exit(JsonToken.AsValue().AsText());
-
-        // Draft messages may wrap the ID in a 'message' object
-        if JsonObj.Get('message', MsgToken) then begin
-            JsonObj := MsgToken.AsObject();
-            if JsonObj.Get('id', JsonToken) then
-                exit(JsonToken.AsValue().AsText());
-        end;
 
         exit('');
     end;
@@ -376,7 +368,11 @@ codeunit 50105 "W365 Graph Mail Mgt"
         StatusCode: Integer;
         ResponseText: Text;
         ConnectErr: Label 'Could not reach Microsoft Graph when uploading attachment chunk.';
+        ZeroByteErr: Label 'Cannot upload a zero-byte attachment via upload session.';
     begin
+        if AttachSize = 0 then
+            Error(ZeroByteErr);
+
         // Upload the entire attachment in one PUT (Graph allows up to 60 MB per PUT)
         HttpContent.WriteFrom(AttachInStr);
         HttpContent.GetHeaders(ContentHeaders);
@@ -579,25 +575,34 @@ codeunit 50105 "W365 Graph Mail Mgt"
         AttachName: Text;
         AttachContentType: Text;
         AttachBase64: Text;
+        AttachContentId: Text;
     begin
         HasAttachments := false;
         if not EmailMessage.Attachments_First() then
             exit(AttachmentsArr);
 
         repeat
-            if not EmailMessage.Attachments_IsInline() then begin
-                AttachName := EmailMessage.Attachments_GetName();
-                AttachContentType := EmailMessage.Attachments_GetContentType();
-                AttachBase64 := EmailMessage.Attachments_GetContentBase64();
+            AttachName := EmailMessage.Attachments_GetName();
+            AttachContentType := EmailMessage.Attachments_GetContentType();
+            AttachBase64 := EmailMessage.Attachments_GetContentBase64();
 
-                Clear(AttachObj);
-                AttachObj.Add('@odata.type', '#microsoft.graph.fileAttachment');
-                AttachObj.Add('name', AttachName);
-                AttachObj.Add('contentType', AttachContentType);
-                AttachObj.Add('contentBytes', AttachBase64);
-                AttachmentsArr.Add(AttachObj);
-                HasAttachments := true;
+            Clear(AttachObj);
+            AttachObj.Add('@odata.type', '#microsoft.graph.fileAttachment');
+            AttachObj.Add('name', AttachName);
+            AttachObj.Add('contentType', AttachContentType);
+            AttachObj.Add('contentBytes', AttachBase64);
+
+            if EmailMessage.Attachments_IsInline() then begin
+                // Inline attachments are CID-referenced images embedded in the HTML body.
+                // Include them with isInline: true and contentId so the recipient sees them rendered.
+                AttachContentId := EmailMessage.Attachments_GetId();
+                AttachObj.Add('isInline', true);
+                if AttachContentId <> '' then
+                    AttachObj.Add('contentId', AttachContentId);
             end;
+
+            AttachmentsArr.Add(AttachObj);
+            HasAttachments := true;
         until not EmailMessage.Attachments_Next();
 
         exit(AttachmentsArr);
@@ -616,8 +621,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
             exit(0);
 
         repeat
-            if not EmailMessage.Attachments_IsInline() then
-                TotalSize += EmailMessage.Attachments_GetLength();
+            TotalSize += EmailMessage.Attachments_GetLength();
         until not EmailMessage.Attachments_Next();
 
         exit(TotalSize);

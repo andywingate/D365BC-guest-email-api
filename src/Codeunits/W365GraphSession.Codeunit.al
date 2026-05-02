@@ -40,7 +40,7 @@ codeunit 50114 "W365 Graph Session"
         SessionToken := AccessToken;
         HasToken := true;
         // 50 minutes (conservative; MSAL caches the real expiry and handles silent refresh)
-        TokenExpiry := CurrentDateTime() + 3000000;
+        TokenExpiry := CurrentDateTime() + (50 * 60 * 1000);
     end;
 
     /// <summary>
