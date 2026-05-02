@@ -26,12 +26,16 @@ codeunit 50110 "W365 Guest Email Connector" implements "Email Connector", "Email
         AppReg: Record "W365 App Registration";
         AccessToken: SecretText;
         Recipients: List of [Text];
+        CcRecipients: List of [Text];
+        BccRecipients: List of [Text];
         NoRecipientsErr: Label 'The email message has no recipients.';
         NoTokenBackgroundErr: Label 'Email authentication is required. Sign in to Business Central interactively to renew your email authorisation, then retry.';
         NoAppRegErr: Label 'No App Registration has been configured. Create one on the App Registrations page.';
     begin
         EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"To", Recipients);
-        if Recipients.Count() = 0 then
+        EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"Cc", CcRecipients);
+        EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"Bcc", BccRecipients);
+        if (Recipients.Count() + CcRecipients.Count() + BccRecipients.Count()) = 0 then
             Error(NoRecipientsErr);
 
         if not OAuthMgt.GetAppRegistrationForCurrentUser(AppReg) then

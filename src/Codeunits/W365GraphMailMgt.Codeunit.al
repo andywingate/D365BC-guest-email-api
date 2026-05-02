@@ -14,12 +14,15 @@ codeunit 50105 "W365 Graph Mail Mgt"
     /// <summary>
     /// Sends an email via Microsoft Graph using the provided access token.
     /// Handles all To/Cc/Bcc recipients and attachments from the Email Message.
-    /// Chooses inline base64 for small attachments and upload session for large ones.
+    /// Uses inline base64 when every attachment is below 3 MB; otherwise uses the
+    /// upload session pattern (draft + createUploadSession per attachment + send).
+    /// A 3 MB per-attachment threshold keeps the sendMail request body safely within
+    /// Graph's 4 MB limit after base64 expansion (~33% overhead).
     /// </summary>
     [NonDebuggable]
     procedure SendEmail(EmailMessage: Codeunit "Email Message"; AccessToken: SecretText): Boolean
     begin
-        if GetTotalAttachmentSize(EmailMessage) < 4 * 1024 * 1024 then
+        if GetLargestAttachmentSize(EmailMessage) < (3 * 1024 * 1024) then
             exit(SendMailInline(EmailMessage, AccessToken))
         else
             exit(SendMailViaUploadSession(EmailMessage, AccessToken));
@@ -32,7 +35,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
     [NonDebuggable]
     procedure SendEmailAsSharedMailbox(EmailMessage: Codeunit "Email Message"; AccessToken: SecretText; MailboxEmail: Text): Boolean
     begin
-        if GetTotalAttachmentSize(EmailMessage) < 4 * 1024 * 1024 then
+        if GetLargestAttachmentSize(EmailMessage) < (3 * 1024 * 1024) then
             exit(SendMailInlineAsMailbox(EmailMessage, AccessToken, MailboxEmail))
         else
             exit(SendMailViaUploadSessionAsMailbox(EmailMessage, AccessToken, MailboxEmail));
@@ -190,21 +193,21 @@ codeunit 50105 "W365 Graph Mail Mgt"
         AuthHeader := SecretStrSubstNo('Bearer %1', AccessToken);
 
         // Step 1: create a draft message (no attachments in body)
-        MessageId := CreateDraftMessage(EmailMessage, AccessToken, MessageEndpoint, AuthHeader);
+        MessageId := CreateDraftMessage(EmailMessage, MessageEndpoint, AuthHeader);
         if MessageId = '' then
             exit(false);
 
         // Step 2: upload each attachment via upload session
-        if not UploadAllAttachments(EmailMessage, AccessToken, MessageEndpoint, MessageId, AuthHeader) then
+        if not UploadAllAttachments(EmailMessage, MessageEndpoint, MessageId, AuthHeader) then
             exit(false);
 
         // Step 3: send the draft
         SendEndpoint := StrSubstNo(SendEndpointTemplate, MessageId);
-        exit(SendDraftMessage(AccessToken, SendEndpoint, AuthHeader));
+        exit(SendDraftMessage(SendEndpoint, AuthHeader));
     end;
 
     [NonDebuggable]
-    local procedure CreateDraftMessage(EmailMessage: Codeunit "Email Message"; AccessToken: SecretText; MessageEndpoint: Text; AuthHeader: Text): Text
+    local procedure CreateDraftMessage(EmailMessage: Codeunit "Email Message"; MessageEndpoint: Text; AuthHeader: Text): Text
     var
         HttpClient: HttpClient;
         HttpReqMsg: HttpRequestMessage;
@@ -239,6 +242,11 @@ codeunit 50105 "W365 Graph Mail Mgt"
         StatusCode := HttpRespMsg.HttpStatusCode();
         HttpRespMsg.Content.ReadAs(ResponseText);
 
+        if StatusCode = 401 then begin
+            ClearSessionToken();
+            Error('Microsoft Graph rejected the authorisation token (401). Re-authentication will occur on the next send.');
+        end;
+
         if StatusCode <> 201 then begin
             ParseAndRaiseGraphError(ResponseText, StatusCode);
             exit('');
@@ -254,7 +262,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
     end;
 
     [NonDebuggable]
-    local procedure UploadAllAttachments(EmailMessage: Codeunit "Email Message"; AccessToken: SecretText; MessageEndpoint: Text; MessageId: Text; AuthHeader: Text): Boolean
+    local procedure UploadAllAttachments(EmailMessage: Codeunit "Email Message"; MessageEndpoint: Text; MessageId: Text; AuthHeader: Text): Boolean
     var
         Base64Convert: Codeunit "Base64 Convert";
         TempBlob: Codeunit "Temp Blob";
@@ -282,7 +290,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
                 TempBlob.CreateInStream(AttachInStr);
 
                 // Create upload session for this attachment
-                UploadUrl := CreateAttachmentUploadSession(AccessToken, MessageEndpoint, MessageId, AuthHeader, AttachName, AttachContentType, AttachSize);
+                UploadUrl := CreateAttachmentUploadSession(MessageEndpoint, MessageId, AuthHeader, AttachName, AttachContentType, AttachSize);
                 if UploadUrl = '' then
                     exit(false);
 
@@ -296,7 +304,7 @@ codeunit 50105 "W365 Graph Mail Mgt"
     end;
 
     [NonDebuggable]
-    local procedure CreateAttachmentUploadSession(AccessToken: SecretText; MessageEndpoint: Text; MessageId: Text; AuthHeader: Text; AttachName: Text; AttachContentType: Text; AttachSize: Integer): Text
+    local procedure CreateAttachmentUploadSession(MessageEndpoint: Text; MessageId: Text; AuthHeader: Text; AttachName: Text; AttachContentType: Text; AttachSize: Integer): Text
     var
         HttpClient: HttpClient;
         HttpReqMsg: HttpRequestMessage;
@@ -342,6 +350,11 @@ codeunit 50105 "W365 Graph Mail Mgt"
         StatusCode := HttpRespMsg.HttpStatusCode();
         HttpRespMsg.Content.ReadAs(ResponseText);
 
+        if StatusCode = 401 then begin
+            ClearSessionToken();
+            Error('Microsoft Graph rejected the authorisation token (401). Re-authentication will occur on the next send.');
+        end;
+
         if StatusCode <> 200 then begin
             ParseAndRaiseGraphError(ResponseText, StatusCode);
             exit('');
@@ -369,9 +382,15 @@ codeunit 50105 "W365 Graph Mail Mgt"
         ResponseText: Text;
         ConnectErr: Label 'Could not reach Microsoft Graph when uploading attachment chunk.';
         ZeroByteErr: Label 'Cannot upload a zero-byte attachment via upload session.';
+        AttachTooLargeErr: Label 'Attachment is too large to send via Microsoft Graph. The maximum supported size is 60 MB.';
+        MaxSinglePutBytes: Integer;
     begin
         if AttachSize = 0 then
             Error(ZeroByteErr);
+
+        MaxSinglePutBytes := 60 * 1024 * 1024; // 60 MB - Graph single-PUT limit
+        if AttachSize > MaxSinglePutBytes then
+            Error(AttachTooLargeErr);
 
         // Upload the entire attachment in one PUT (Graph allows up to 60 MB per PUT)
         HttpContent.WriteFrom(AttachInStr);
@@ -396,13 +415,18 @@ codeunit 50105 "W365 Graph Mail Mgt"
         if StatusCode in [200, 201, 202] then
             exit(true);
 
+        if StatusCode = 401 then begin
+            ClearSessionToken();
+            Error('Microsoft Graph rejected the authorisation token (401). Re-authentication will occur on the next send.');
+        end;
+
         HttpRespMsg.Content.ReadAs(ResponseText);
         ParseAndRaiseGraphError(ResponseText, StatusCode);
         exit(false);
     end;
 
     [NonDebuggable]
-    local procedure SendDraftMessage(AccessToken: SecretText; SendEndpoint: Text; AuthHeader: Text): Boolean
+    local procedure SendDraftMessage(SendEndpoint: Text; AuthHeader: Text): Boolean
     var
         HttpClient: HttpClient;
         HttpReqMsg: HttpRequestMessage;
@@ -434,6 +458,11 @@ codeunit 50105 "W365 Graph Mail Mgt"
 
         if StatusCode = 202 then
             exit(true);
+
+        if StatusCode = 401 then begin
+            ClearSessionToken();
+            Error('Microsoft Graph rejected the authorisation token (401). Re-authentication will occur on the next send.');
+        end;
 
         if StatusCode = 429 then
             Error(ThrottledErr);
@@ -612,19 +641,24 @@ codeunit 50105 "W365 Graph Mail Mgt"
     // Attachment size helper
     // -------------------------------------------------------------------------
 
-    local procedure GetTotalAttachmentSize(EmailMessage: Codeunit "Email Message"): Integer
+    // Returns the size (in bytes) of the largest single attachment in the message.
+    // Used to decide between inline base64 and upload-session strategies.
+    local procedure GetLargestAttachmentSize(EmailMessage: Codeunit "Email Message"): Integer
     var
-        TotalSize: Integer;
+        LargestSize: Integer;
+        AttachSize: Integer;
     begin
-        TotalSize := 0;
+        LargestSize := 0;
         if not EmailMessage.Attachments_First() then
             exit(0);
 
         repeat
-            TotalSize += EmailMessage.Attachments_GetLength();
+            AttachSize := EmailMessage.Attachments_GetLength();
+            if AttachSize > LargestSize then
+                LargestSize := AttachSize;
         until not EmailMessage.Attachments_Next();
 
-        exit(TotalSize);
+        exit(LargestSize);
     end;
 
     // -------------------------------------------------------------------------

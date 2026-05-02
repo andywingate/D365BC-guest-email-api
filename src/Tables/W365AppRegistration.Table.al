@@ -48,13 +48,10 @@ table 50111 "W365 App Registration"
                 OtherReg: Record "W365 App Registration";
             begin
                 if Rec."Is Default" then begin
+                    OtherReg.LockTable();
                     OtherReg.SetRange("Is Default", true);
                     OtherReg.SetFilter("Code", '<>%1', Rec."Code");
-                    if OtherReg.FindSet() then
-                        repeat
-                            OtherReg."Is Default" := false;
-                            OtherReg.Modify(true);
-                        until OtherReg.Next() = 0;
+                    OtherReg.ModifyAll("Is Default", false, true);
                 end;
             end;
         }

@@ -137,6 +137,8 @@ codeunit 50106 "W365 OAuth Mgt"
     var
         AppReg: Record "W365 App Registration";
     begin
+        if IsNullGuid(AppId) then
+            exit(false);
         AppReg."App ID" := AppId;
         AppReg."Code" := '';
         exit(IsolatedStorage.Contains(AppReg.GetClientSecretKey(), DataScope::Company));

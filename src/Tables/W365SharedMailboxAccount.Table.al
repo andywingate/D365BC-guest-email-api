@@ -24,6 +24,7 @@ table 50115 "W365 Shared Mailbox Account"
         {
             Caption = 'Mailbox Email / UPN';
             DataClassification = EndUserIdentifiableInformation;
+            NotBlank = true;
             // The email address or UPN of the shared mailbox.
             // Used in the Graph endpoint: /v1.0/users/{MailboxEmail}/sendMail
         }
@@ -31,6 +32,7 @@ table 50115 "W365 Shared Mailbox Account"
         {
             Caption = 'App Registration';
             DataClassification = SystemMetadata;
+            NotBlank = true;
             TableRelation = "W365 App Registration"."Code";
         }
         field(5; "Description"; Text[250])

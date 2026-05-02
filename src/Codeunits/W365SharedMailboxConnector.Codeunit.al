@@ -25,13 +25,17 @@ codeunit 50118 "W365 Shared Mailbox Connector" implements "Email Connector", "Em
         AppReg: Record "W365 App Registration";
         AccessToken: SecretText;
         Recipients: List of [Text];
+        CcRecipients: List of [Text];
+        BccRecipients: List of [Text];
         NoRecipientsErr: Label 'The email message has no recipients.';
         NoAccountErr: Label 'Shared mailbox account %1 not found.';
         NoAppRegErr: Label 'No App Registration is linked to shared mailbox %1.';
         NoTokenBackgroundErr: Label 'Email authentication is required. Sign in to Business Central interactively to renew your email authorisation, then retry.';
     begin
         EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"To", Recipients);
-        if Recipients.Count() = 0 then
+        EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"Cc", CcRecipients);
+        EmailMessage.GetRecipients(Enum::"Email Recipient Type"::"Bcc", BccRecipients);
+        if (Recipients.Count() + CcRecipients.Count() + BccRecipients.Count()) = 0 then
             Error(NoRecipientsErr);
 
         if not MailboxAccount.GetBySystemId(AccountId) then
